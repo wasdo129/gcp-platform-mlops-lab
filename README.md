@@ -20,3 +20,7 @@ Open Google Cloud Shell in the existing project. From a Cloud Shell copy of this
 ```
 
 The script prints the report path and a status for each check. Reports are stored beneath the Git-ignored `.audit/` directory. See the [Foundation Audit guide](docs/learning/gcp-foundation-audit.md) for setup, interpretation, troubleshooting, and the proposal for the next exercise.
+
+## Lab 02
+
+The [Terraform bootstrap and networking guide](docs/learning/terraform-bootstrap-and-networking.md) covers local validation, the regional state bucket, the custom VPC, future GKE address ranges, GCS backend migration and recovery, and cleanup.

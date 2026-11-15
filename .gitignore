@@ -1,0 +1,17 @@
+/.audit/
+__pycache__/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+*.tfbackend
+crash.log
+crash.*.log
+.env
+.env.*
+!.env.example
+.audit/
+.terraform.tfvars
+.terraform.tfvars.json

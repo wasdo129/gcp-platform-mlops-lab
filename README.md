@@ -1,26 +1,13 @@
-# GCP Platform Engineering & MLOps Lab
+# GKE operations lab
 
-Build a reproducible, cost-controlled Google Cloud platform and document the design and operational trade-offs as a Senior DevOps, SRE, and MLOps infrastructure portfolio project.
+A three-week track for engineers familiar with Kubernetes, with 3–5 hours per week in `europe-west3`.
 
-| Phase | Learning objectives |
-| --- | --- |
-| 1. Foundations | Inspect project hierarchy, IAM, APIs, quotas, VPCs, and existing workloads. Design Terraform state and a minimal network. |
-| 2. Kubernetes platform | Compare GKE Standard and Autopilot. Use workload identity, Artifact Registry, GitHub Actions, Argo CD, and Cloud Observability. |
-| 3. MLOps | Build CPU-based training and deployment workflows with Vertex AI, then compare managed model serving with GKE and KServe. |
-| 4. Portfolio | Document architecture, operational runbooks, security decisions, cleanup, and cost estimates. |
+| Week | Exercise | Evidence to keep |
+| --- | --- | --- |
+| 1 | [GKE Standard vs Autopilot](docs/learning/gke-standard-vs-autopilot.md) and the [zonal CPU-only Standard lab](docs/learning/gke-practical-lab.md) | Project inventory, Pending Pod and autoscaler events, estimated cost, and cleanup verification |
+| 2 | [Autopilot experiment outline](docs/learning/gke-standard-vs-autopilot.md#autopilot-experiment-outline) | Compare submitted and admitted resource requests, provisioning, and idle cost after workload removal |
+| 3 | [NVIDIA GPU on GKE outline](docs/learning/gke-gpu.md) | Quota and capacity assessment, a CPU-only scheduling exercise, and a design for a future GPU environment |
 
-Plan for roughly 12 weeks at 3–5 hours per week, with 60% of the time on platform engineering and 40% on MLOps. The preferred lab locations are `europe-west3` and `europe-west3-a`.
+Run the cluster experiments sequentially. The Standard guide starts with read-only checks. Get explicit approval before provisioning, deleting resources, changing IAM or enabling APIs. Keep the Free Trial billing account unchanged. Budget alerts do not cap spending.
 
-## First assignment
-
-Open Google Cloud Shell in the existing project. From a Cloud Shell copy of this repository, run the following command with your lab project ID.
-
-```bash
-./scripts/gcp-audit.sh YOUR_PROJECT_ID europe-west3
-```
-
-The script prints the report path and a status for each check. Reports are stored beneath the Git-ignored `.audit/` directory. See the [Foundation Audit guide](docs/learning/gcp-foundation-audit.md) for setup, interpretation, troubleshooting, and the proposal for the next exercise.
-
-## Lab 02
-
-The [Terraform bootstrap and networking guide](docs/learning/terraform-bootstrap-and-networking.md) covers local validation, the regional state bucket, the custom VPC, future GKE address ranges, GCS backend migration and recovery, and cleanup.
+The [foundation audit](docs/learning/gcp-foundation-audit.md) and [Terraform bootstrap and networking exercise](docs/learning/terraform-bootstrap-and-networking.md) document earlier work. The GKE exercises use `gcloud` and `kubectl`.

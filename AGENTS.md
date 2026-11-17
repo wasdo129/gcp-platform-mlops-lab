@@ -1,6 +1,6 @@
 # Engineering rules
 
-- Use infrastructure as code. Separate Terraform bootstrap from workload state, constrain provider versions explicitly, and track the provider lock file when Terraform is introduced.
+- Use infrastructure as code. Separate Terraform bootstrap from workload state, constrain provider versions explicitly, and track the provider lock file when Terraform is introduced. Use documented gcloud and kubectl commands for the short-lived GKE learning exercises.
 - Scope IAM to required permissions and resources. Prefer Workload Identity Federation for CI and GKE workloads. Never create long-lived service account keys or hardcode credentials.
 - Keep audit reports, Terraform state, real variable files, saved plans, and credentials out of Git. Review example files and diffs before publishing.
 - Use official Google Cloud documentation for pricing, quota, and eligibility. Check project quotas, capacity constraints, trial eligibility, and pricing before proposing any deployment.

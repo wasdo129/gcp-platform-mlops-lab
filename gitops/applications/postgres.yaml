@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: postgres
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/wasdo129/gcp-platform-mlops-lab.git
+    targetRevision: "@GIT_REVISION@"
+    path: gitops/apps/cloudnative-pg
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-platform
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 8

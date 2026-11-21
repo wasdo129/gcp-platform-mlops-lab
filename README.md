@@ -1,4 +1,16 @@
-# GKE operations lab
+# GKE LLMOps platform lab
+
+An ephemeral CPU-first LLMOps platform on GKE Standard. Phases 1 and 2 cover Terraform, GitOps, CloudNativePG and local backup/restore. The full GKE recreation test requires explicit cloud approval and is pending.
+
+- [Controlled first deployment and safe teardown](docs/runbooks/lifecycle.md)
+- [PostgreSQL recreation acceptance test](docs/runbooks/integration.md)
+- [Architecture and security model](docs/architecture/platform.md)
+- [Cost and residual resources](docs/costs/lab.md)
+- [Ten-phase roadmap](docs/roadmap.md)
+
+Use `infra/terraform/foundation` for persistent buckets and `infra/terraform/gke-lab` for short-lived GKE. These roots use different states. Preserve the older `terraform/` roots as learning exercises and do not apply them alongside the platform.
+
+## Original GKE exercises
 
 A three-week track for engineers familiar with Kubernetes, with 3–5 hours per week in `europe-west3`.
 

@@ -1,0 +1,24 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: mlflow-postgres
+  namespace: ml-platform
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11-202610260819-system-bookworm@sha256:9cf9466e674a794aee83693b9c28d8b3103d612a943bf144117a718b97b9d1db
+  enableSuperuserAccess: false
+  bootstrap:
+    initdb:
+      database: mlflow
+      owner: mlflow
+      postInitApplicationSQL:
+        - ALTER DATABASE mlflow CONNECTION LIMIT 0
+  storage:
+    storageClass: standard-rwo
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi

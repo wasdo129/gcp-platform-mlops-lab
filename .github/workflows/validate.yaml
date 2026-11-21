@@ -1,0 +1,49 @@
+name: Validate LLMOps lab
+'on':
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.17.2
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.1.4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install validation tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y shellcheck shfmt
+          python -m pip install PyYAML==6.0.3 jsonschema==4.26.0 yamllint==1.38.0
+          mkdir -p "$RUNNER_TEMP/lab-bin"
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz |
+            tar -xz -C "$RUNNER_TEMP/lab-bin" kubeconform
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz |
+            tar -xz -C "$RUNNER_TEMP/lab-bin" actionlint
+          echo "$RUNNER_TEMP/lab-bin" >> "$GITHUB_PATH"
+      - name: Terraform
+        run: |
+          terraform fmt -check -recursive infra/terraform
+          for root in infra/terraform/{foundation,gke-lab}; do
+            terraform -chdir="$root" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$root" validate
+          done
+      - name: Shell and YAML
+        run: |
+          for script in scripts/*.sh; do bash -n "$script"; done
+          shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops}.sh
+          shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops}.sh
+          yamllint -d '{extends: default, rules: {document-start: disable, line-length: disable}}' gitops .github/workflows
+          actionlint
+      - name: Helm and Kubernetes schemas
+        run: scripts/validate-gitops.sh

@@ -1,0 +1,6 @@
+configs:
+  cm:
+    create: false
+server:
+  service:
+    type: ClusterIP

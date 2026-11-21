@@ -16,3 +16,11 @@ crash.*.log
 .env.*
 !.env.example
 !.terraform.lock.hcl
+
+# LLMOps local recovery material
+*.dump
+*.dump.*
+*.partial
+*.backup
+*.kubeconfig
+kubeconfig

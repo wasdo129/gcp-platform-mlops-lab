@@ -33,6 +33,10 @@ The cluster defaults to private nodes and has Private Google Access on its subne
 
 Only the DNS-based Kubernetes API endpoint is enabled. Access requires Google IAM and Kubernetes permissions. Dataplane V2 supports Kubernetes NetworkPolicy. The custom TCP 9443 VPC rule allows the control plane to reach CNPG admission on tagged nodes. Confirm the actual control-plane CIDR and webhook dry run during first deployment. Argo CD uses ClusterIP and local port forwarding. PostgreSQL uses internal CNPG Services.
 
+## CPU lab sizing
+
+The pinned Argo CD chart disables Dex and notifications for this exercise. Argo CD, its Redis initialization Job, the CNPG operator, PostgreSQL and the smoke Deployment declare CPU and memory requests. The steady-state lab workload requests 925 mCPU and 1,440 MiB. The Redis hook adds 50 mCPU and 32 MiB during bootstrap. An `e2-standard-2` has 2 vCPUs and 8 GiB. For the GKE 1.36 baseline, estimate 1,930 mCPU and roughly 6.1 GiB allocatable before GKE system Pods and DaemonSets. Verify actual allocatable resources, requested resources and available disk with `kubectl describe node` before adding workloads. The request budget indicates feasibility for the lab. Peak utilization, node upgrades and ephemeral image storage still require validation. [GKE node sizing](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/plan-node-sizes).
+
 ## Security and recovery
 
 Trust the reviewed GitHub commit, chart versions and pinned images. Helm-installed controllers have cluster privileges and must be treated as supply-chain dependencies. Explicitly authorize Kubernetes operators who can change Applications, Secrets or use `pods/exec`. Broad Argo CD default project permissions are acceptable only in the dedicated single-operator lab. Restrict source repositories and destination permissions with an AppProject before adding tenants.

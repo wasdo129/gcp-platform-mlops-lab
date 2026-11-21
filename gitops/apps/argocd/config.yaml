@@ -7,9 +7,10 @@ metadata:
     app.kubernetes.io/part-of: argocd
 data:
   resource.customizations.health.postgresql.cnpg.io_Cluster: |
-    if obj.status and obj.status.conditions then
+    if obj.status and obj.status.currentPrimary and obj.status.currentPrimary ~= "" and obj.status.conditions then
       for _, condition in ipairs(obj.status.conditions) do
-        if condition.type == "Ready" and condition.status == "True" then
+        if condition.type == "Ready" and condition.status == "True"
+          and (not condition.observedGeneration or condition.observedGeneration == obj.metadata.generation) then
           return {status = "Healthy", message = condition.message}
         end
       end

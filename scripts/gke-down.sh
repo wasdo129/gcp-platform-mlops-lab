@@ -2,6 +2,8 @@
 set -euo pipefail
 # shellcheck source=scripts/lab-common.sh
 source "$(dirname "$0")/lab-common.sh"
+# shellcheck source=scripts/postgres-backup.sh
+source "$REPO/scripts/postgres-backup.sh"
 
 [[ $# == 0 ]] || die "Usage: $0"
 require_commands gcloud shasum
@@ -12,10 +14,14 @@ prepare_postgres
 init_lab_backend
 [[ $(tf output -raw cluster_id) == "$CLUSTER_ID" ]] || die "Terraform state targets a different cluster."
 
+identity=$(database_identity)
+[[ -n "$identity" ]] || die "Database identity is missing."
 printf 'Stop client workloads and verify that other administrators have stopped writes.\n' >&2
 confirm "QUIESCE $CLUSTER/$NAMESPACE/mlflow"
+prepare_postgres
+[[ $(database_identity) == "$identity" ]] || die "Target database changed during confirmation."
 freeze_writes
-archive=$("$REPO/scripts/postgres-backup.sh")
+archive=$(backup_database)
 verify_archive "$archive"
 checksum=$(shasum -a 256 <"$archive")
 assert_frozen
@@ -27,8 +33,8 @@ for volume in $(k -n "$NAMESPACE" get pvc -l "cnpg.io/cluster=$PG_CLUSTER" \
   k get pv "$volume" -o 'custom-columns=PV:.metadata.name,HANDLE:.spec.csi.volumeHandle,RECLAIM:.spec.persistentVolumeReclaimPolicy'
 done
 
-tf plan -destroy -input=false -lock-timeout=30s -var=allow_public_node_egress=true -out="$PLAN_DIR/destroy.tfplan"
-tf show -json "$PLAN_DIR/destroy.tfplan" | jq -e --arg project "$PROJECT" --arg zone "$ZONE" --arg cluster "$CLUSTER" '
+tf plan -destroy -input=false -lock-timeout=30s -var=allow_public_node_egress=true -out="$WORK_DIR/destroy.tfplan"
+tf show -json "$WORK_DIR/destroy.tfplan" | jq -e --arg project "$PROJECT" --arg zone "$ZONE" --arg cluster "$CLUSTER" '
   [.resource_changes[]? | select(.change.actions == ["delete"])] as $deletes
   | any($deletes[]; .address == "google_container_cluster.lab" and
       .change.before.project == $project and .change.before.location == $zone and .change.before.name == $cluster)
@@ -40,9 +46,10 @@ confirm "DESTROY $PROJECT/$ZONE/$CLUSTER"
 [[ -f "$archive" && ! -L "$archive" && $(shasum -a 256 <"$archive") == "$checksum" ]] ||
   die "The validated backup changed or disappeared."
 prepare_postgres
+[[ $(database_identity) == "$identity" ]] || die "Target database changed since the backup."
 assert_frozen
 # Apply exactly the reviewed destroy plan. Foundation is a separate root and state.
-tf apply -input=false -lock-timeout=30s "$PLAN_DIR/destroy.tfplan"
+tf apply -input=false -lock-timeout=30s "$WORK_DIR/destroy.tfplan"
 remaining=$(gcloud container clusters list --project="$PROJECT" \
   --filter="name=$CLUSTER AND location=$ZONE" --format='value(name)')
 [[ -z "$remaining" ]] || die "Cluster remains in GKE inventory."

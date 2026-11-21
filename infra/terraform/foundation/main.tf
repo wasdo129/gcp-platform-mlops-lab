@@ -14,7 +14,7 @@ provider "google" {
 }
 
 resource "google_storage_bucket" "tfstate" {
-  name                        = "${local.project}-tfstate"
+  name                        = "${local.project}-llmops-tfstate"
   location                    = local.region
   storage_class               = "STANDARD"
   uniform_bucket_level_access = true

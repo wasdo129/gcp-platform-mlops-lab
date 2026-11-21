@@ -9,7 +9,7 @@ CONTEXT="gke_${PROJECT}_${ZONE}_${CLUSTER}"
 CLUSTER_ID="projects/$PROJECT/locations/$ZONE/clusters/$CLUSTER"
 NAMESPACE=ml-platform
 PG_CLUSTER=mlflow-postgres
-LAB_DIR="$HOME/.llmops-lab"
+LAB_DIR=${LLMOPS_RUNTIME_DIR:-"$HOME/.llmops-lab"}
 BACKUP_DIR=${LLMOPS_BACKUP_DIR:-"$HOME/llmops-backups/postgresql"}
 export KUBECONFIG="$LAB_DIR/lab.kubeconfig"
 # Keep CLI environment overrides from injecting Terraform init/plan arguments.
@@ -77,6 +77,11 @@ sql() {
   pg psql -X -w -U postgres -d "$1" -At -v ON_ERROR_STOP=1 -c "$2"
 }
 
+database_identity() {
+  sql postgres "SELECT system_identifier || ':' || oid
+                FROM pg_control_system(), pg_database WHERE datname = 'mlflow'"
+}
+
 freeze_writes() {
   printf 'Closing mlflow to non-superuser connections and draining existing clients.\n' >&2
   sql postgres 'ALTER DATABASE mlflow CONNECTION LIMIT 0' >/dev/null
@@ -89,13 +94,14 @@ freeze_writes() {
 assert_frozen() {
   [[ $(sql postgres "SELECT datconnlimit = 0 AND NOT EXISTS
                            (SELECT FROM pg_stat_activity WHERE datname = 'mlflow' AND backend_type = 'client backend')
+                        AND NOT EXISTS (SELECT FROM pg_prepared_xacts WHERE database = 'mlflow')
                       FROM pg_database WHERE datname = 'mlflow'") == t ]] ||
     die "Database write gate verification failed."
 }
 
 verify_archive() {
   [[ -f "$1" && -s "$1" && ! -L "$1" ]] || die "Expected a regular non-empty dump: $1"
-  pg pg_restore --format=custom --list <"$1" >/dev/null
+  pg pg_restore --format=custom --list <"$1" >/dev/null || die "Invalid dump table of contents: $1"
   # Read every archived data stream and check decompression as well as the TOC.
   pg pg_restore --format=custom --file=/dev/null <"$1"
 }
@@ -112,7 +118,7 @@ tf() {
 
 init_lab_backend() {
   tf init -input=false -reconfigure -lockfile=readonly \
-    -backend-config="bucket=$PROJECT-tfstate" -backend-config="prefix=llmops/gke-lab"
+    -backend-config="bucket=$PROJECT-llmops-tfstate" -backend-config="prefix=llmops/gke-lab"
 }
 
 begin_lifecycle() {
@@ -120,10 +126,10 @@ begin_lifecycle() {
   mkdir -p "$LAB_DIR"
   [[ -d "$LAB_DIR" && ! -L "$LAB_DIR" ]] || die "Unexpected directory: $LAB_DIR"
   chmod 700 "$LAB_DIR"
-  mkdir "$LAB_DIR/lifecycle.lock" || die "Another lifecycle operation may be active."
-  PLAN_DIR=''
-  trap 'if [[ -n "$PLAN_DIR" ]]; then rm -rf -- "$PLAN_DIR"; fi; rmdir "$LAB_DIR/lifecycle.lock"' EXIT
+  mkdir "$LAB_DIR/lifecycle.lock" || die "Another lab operation may be active."
+  WORK_DIR=''
+  trap 'if [[ -n "$WORK_DIR" ]]; then rm -rf -- "$WORK_DIR"; fi; rmdir "$LAB_DIR/lifecycle.lock"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  PLAN_DIR=$(mktemp -d "$LAB_DIR/plan.XXXXXXXX")
+  WORK_DIR=$(mktemp -d "$LAB_DIR/operation.XXXXXXXX")
 }

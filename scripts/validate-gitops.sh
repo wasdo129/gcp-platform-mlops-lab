@@ -11,9 +11,11 @@ if [[ -z ${LLMOPS_CHART_CACHE-} ]]; then
   helm pull cloudnative-pg --repo https://cloudnative-pg.github.io/charts --version 0.29.2 --destination "$charts"
 fi
 helm lint "$charts/argo-cd-10.17.2.tgz" -f gitops/bootstrap/values.yaml
-helm lint "$charts/cloudnative-pg-0.29.2.tgz"
+python3 -c 'import sys, yaml; yaml.safe_dump(yaml.safe_load(sys.stdin)["spec"]["source"]["helm"]["valuesObject"], sys.stdout)' \
+  <gitops/applications/operator.yaml >"$rendered/cnpg-values.yaml"
+helm lint "$charts/cloudnative-pg-0.29.2.tgz" -f "$rendered/cnpg-values.yaml"
 helm template argocd "$charts/argo-cd-10.17.2.tgz" -n argocd --include-crds -f gitops/bootstrap/values.yaml >"$rendered/argocd.yaml"
-helm template cloudnative-pg "$charts/cloudnative-pg-0.29.2.tgz" -n cnpg-system --include-crds >"$rendered/cnpg.yaml"
+helm template cloudnative-pg "$charts/cloudnative-pg-0.29.2.tgz" -n cnpg-system --include-crds -f "$rendered/cnpg-values.yaml" >"$rendered/cnpg.yaml"
 python3 scripts/validate-gitops.py "$rendered/argocd.yaml" "$rendered/cnpg.yaml"
 kubeconform -strict -summary -kubernetes-version 1.36.0 \
   gitops/apps/argocd/config.yaml gitops/apps/smoke/deployment.yaml

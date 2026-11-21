@@ -73,6 +73,12 @@ resource "google_container_cluster" "lab" {
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
   }
 
+  addons_config {
+    gce_persistent_disk_csi_driver_config {
+      enabled = true
+    }
+  }
+
   release_channel {
     channel = "REGULAR"
   }

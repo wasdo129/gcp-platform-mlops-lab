@@ -26,6 +26,7 @@ trap 'exit 143' TERM
 unset PGSERVICE PGSERVICEFILE PGHOSTADDR
 export PGHOST="$fixture"
 export PGPORT=5432
+export LLMOPS_RUNTIME_DIR="$fixture/runtime"
 export LLMOPS_BACKUP_DIR="$fixture/backups"
 mkdir "$fixture/bin"
 initdb -D "$fixture/data" --username=postgres --auth=trust --no-locale >/dev/null
@@ -73,6 +74,13 @@ psql -X -U mlflow -d mlflow -v ON_ERROR_STOP=1 -q <<'SQL'
 CREATE TABLE public.lab_recovery_check (id integer PRIMARY KEY, payload text NOT NULL);
 INSERT INTO public.lab_recovery_check VALUES (1, 'survived-recreation');
 SQL
+mkdir -p "$LLMOPS_RUNTIME_DIR/lifecycle.lock"
+if "$repo/scripts/postgres-backup.sh" >"$fixture/locked.log" 2>&1; then
+  printf 'Backup ignored an active lab operation.\n' >&2
+  exit 1
+fi
+grep -q 'Another lab operation may be active' "$fixture/locked.log"
+rmdir "$LLMOPS_RUNTIME_DIR/lifecycle.lock"
 archive=$("$repo/scripts/postgres-backup.sh")
 [[ -s "$archive" ]]
 sleep 1
@@ -82,7 +90,7 @@ if LLMOPS_TEST_FAIL_DUMP=1 "$repo/scripts/postgres-backup.sh"; then
 fi
 shopt -s nullglob
 archives=("$LLMOPS_BACKUP_DIR"/*.dump)
-partials=("$LLMOPS_BACKUP_DIR"/*.partial)
+partials=("$LLMOPS_BACKUP_DIR"/.*.partial)
 [[ ${#archives[@]} == 1 && ${archives[0]} == "$archive" && ${#partials[@]} == 0 ]]
 
 psql -X -U postgres -d postgres -v ON_ERROR_STOP=1 -q <<'SQL'

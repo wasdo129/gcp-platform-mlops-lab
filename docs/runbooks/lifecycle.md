@@ -32,7 +32,7 @@ On 21 November 2026, the read-only checks found no GKE clusters or GCS buckets i
 
 ## 2. Create the persistent foundation once
 
-Obtain explicit approval for the two GCS buckets. Inspect both their names and any previous local/external Terraform state. If either bucket exists, verify ownership and reconcile or import it before applying. Do not reuse an unknown bucket or operate the historical exercise roots against the same resources.
+Obtain explicit approval for the two GCS buckets. Inspect both their names and any previous local/external Terraform state. The active foundation uses `project-557b18ac-4cdc-4a40-b3e-llmops-tfstate` for state and `project-557b18ac-4cdc-4a40-b3e-ml-artifacts` for artifacts. The legacy bootstrap still refers to `project-557b18ac-4cdc-4a40-b3e-tfstate`. Read-only checks returned 404 for all three names at review time. If either active bucket now exists, stop and verify ownership and lineage before approving a plan. If a previous lab was applied to the legacy bucket, recover and migrate its state through a separately reviewed procedure before using these scripts. Do not initialize an empty backend over existing resources. Do not reuse an unknown bucket or operate the historical exercise roots against the same resources.
 
 Use an existing Google Application Default Credentials session, or establish user ADC with `gcloud auth application-default login` as a separate local authentication step. The gcloud login and ADC can represent different identities. Verify both before proceeding.
 
@@ -74,7 +74,7 @@ Stop workload controllers and clients that write to `mlflow`. Coordinate any adm
 scripts/gke-down.sh
 ```
 
-The quiesce confirmation sets PostgreSQL's database connection limit to zero and closes existing database sessions. The script saves and validates a fresh local archive, prints its location and size, records the PVC disk handle, and shows a Terraform destroy plan. Type the destroy token only after explicit approval. A refused confirmation or a failed backup or plan leaves the database closed and cluster running. Reopen intentionally after verifying data integrity and cancellation of teardown.
+The quiesce confirmation sets PostgreSQL's database connection limit to zero and closes existing database sessions, rolling back their uncommitted transactions. The local lock serializes the four scripts on one Mac. It does not protect against a second host, ad hoc SQL, or superuser and background writes. Keep a single operator, stop writers and leave the gate closed until destroy completes. The script saves and validates a fresh local archive, prints its location and size, records the PVC disk handle, and shows a Terraform destroy plan. Type the destroy token only after explicit approval. A refused confirmation or a failed backup or plan leaves the database closed and cluster running. Reopen intentionally after verifying data integrity and cancellation of teardown.
 
 After destroy, compare the independent cluster, network, address, disk and forwarding-rule inventories. Also verify node instance groups and firewall rules against the recorded baseline. GKE can leave the PostgreSQL disk behind even with reclaim policy Delete. After a verified archive and separate explicit cleanup approval, delete only the exact unattached disk matching the recorded CSI handle. [GKE retained disk behavior](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/persistent-volumes).
 
@@ -107,11 +107,15 @@ kubectl -n ml-platform exec "$primary" -c postgres -- psql -X -v ON_ERROR_STOP=1
   -c 'ALTER DATABASE mlflow CONNECTION LIMIT -1'
 ```
 
-If initial restore committed but initialization did not finish, verify the expected records and ownership before manually creating the `database-initialized` ConfigMap with the current CNPG UID and reopening.
+If initial restore committed but initialization did not finish, verify the expected records and ownership before manually creating the `database-initialized` ConfigMap with the current CNPG UID and PostgreSQL identity, then reopen the database.
 
 ```bash
 database_uid=$(kubectl -n ml-platform get cluster/mlflow-postgres -o jsonpath='{.metadata.uid}')
-kubectl -n ml-platform create configmap database-initialized --from-literal="clusterUID=$database_uid"
+database_id=$(kubectl -n ml-platform exec "$primary" -c postgres -- psql -X -At -U postgres -d postgres \
+  -c "SELECT system_identifier || ':' || oid FROM pg_control_system(), pg_database WHERE datname = 'mlflow'")
+test -n "$database_uid" && test -n "$database_id" &&
+  kubectl -n ml-platform create configmap database-initialized \
+    --from-literal="clusterUID=$database_uid" --from-literal="databaseID=$database_id"
 ```
 
 ## Emergency teardown without a fresh backup

@@ -26,6 +26,10 @@ jobs:
           sudo apt-get install -y shellcheck shfmt
           python -m pip install PyYAML==6.0.3 jsonschema==4.26.0 yamllint==1.38.0
           mkdir -p "$RUNNER_TEMP/lab-bin"
+          curl -fsSL https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl -o "$RUNNER_TEMP/lab-bin/kubectl"
+          curl -fsSL https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl.sha256 -o "$RUNNER_TEMP/kubectl.sha256"
+          echo "$(cat "$RUNNER_TEMP/kubectl.sha256")  $RUNNER_TEMP/lab-bin/kubectl" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/lab-bin/kubectl"
           curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz |
             tar -xz -C "$RUNNER_TEMP/lab-bin" kubeconform
           curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz |
@@ -41,9 +45,33 @@ jobs:
       - name: Shell and YAML
         run: |
           for script in scripts/*.sh; do bash -n "$script"; done
-          shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops}.sh
-          shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops}.sh
+          shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up}.sh
+          shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up,mlflow-common}.sh
           yamllint -d '{extends: default, rules: {document-start: disable, line-length: disable}}' gitops .github/workflows
+          python -m py_compile scripts/mlflow-smoke.py
           actionlint
       - name: Helm and Kubernetes schemas
         run: scripts/validate-gitops.sh
+      - name: Native AMD64 MLflow image smoke test
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          image=llmops-mlflow:ci
+          container=llmops-mlflow-ci
+          docker buildx build --platform linux/amd64 --load -t "$image" apps/mlflow
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = linux/amd64
+          docker run --rm --read-only --entrypoint python "$image" \
+            -c 'import os, mlflow, psycopg2, google.cloud.storage; assert os.getuid() == os.getgid() == 10001; assert mlflow.__version__ == "3.18.0"'
+          trap 'docker logs "$container" 2>/dev/null || true; docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" --read-only --tmpfs /tmp:rw,mode=1777 \
+            --cap-drop ALL --security-opt no-new-privileges -e MLFLOW_DISABLE_TELEMETRY=true \
+            "$image" --host=0.0.0.0 --workers=1 --serve-artifacts \
+            --backend-store-uri=sqlite:////tmp/mlflow.db --artifacts-destination=/tmp/artifacts
+          for attempt in {1..30}; do
+            if docker exec "$container" python -c 'from urllib.request import urlopen; urlopen("http://127.0.0.1:5000/health", timeout=2)'; then
+              break
+            fi
+            test "$attempt" != 30
+            sleep 2
+          done
+          docker exec -i "$container" python - http://127.0.0.1:5000 < scripts/mlflow-smoke.py

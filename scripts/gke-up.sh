@@ -4,6 +4,8 @@ set -euo pipefail
 source "$(dirname "$0")/lab-common.sh"
 # shellcheck source=scripts/postgres-restore.sh
 source "$REPO/scripts/postgres-restore.sh"
+# shellcheck source=scripts/mlflow-common.sh
+source "$REPO/scripts/mlflow-common.sh"
 
 [[ $# == 2 || $# == 3 ]] ||
   die "Usage: $0 --allow-public-node-egress GIT_COMMIT_SHA [BACKUP.dump]"
@@ -11,6 +13,10 @@ source "$REPO/scripts/postgres-restore.sh"
 revision=$2
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || die "Supply a full GitHub commit SHA."
 archive=${3-}
+mlflow_image=${LLMOPS_MLFLOW_IMAGE:-}
+if [[ -n "$mlflow_image" ]]; then
+  check_mlflow_release "$revision" "$mlflow_image"
+fi
 if [[ $# == 3 ]]; then
   [[ -f "$archive" && -s "$archive" && -r "$archive" && ! -L "$archive" ]] ||
     die "Expected a readable, non-empty backup file: $archive"
@@ -27,6 +33,7 @@ for manifest in argocd/config.yaml cloudnative-pg/cluster.yaml smoke/deployment.
   cmp -s "$WORK_DIR/source.yaml" "$REPO/gitops/apps/$manifest" ||
     die "Local manifest differs from the published revision: $manifest"
 done
+if [[ -n "$mlflow_image" ]]; then check_mlflow_source "$revision"; fi
 helm show chart argo-cd --repo https://argoproj.github.io/argo-helm --version 10.17.2 >/dev/null
 helm show chart cloudnative-pg --repo https://cloudnative-pg.github.io/charts --version 0.29.2 >/dev/null
 
@@ -125,7 +132,11 @@ fi
   die "Database is closed to clients. Review the recovery runbook."
 [[ $(sql mlflow 'SELECT current_database()') == mlflow ]] || die "Database connectivity verification failed."
 
+if [[ -n "$mlflow_image" ]]; then
+  rollout_mlflow "$revision" "$mlflow_image"
+fi
+
 k get nodes
 k -n argocd get applications
 k -n "$NAMESPACE" get cluster,pods,pvc
-printf 'Database ready. MLflow is scheduled for Phase 3.\n'
+printf 'Database ready.\n'

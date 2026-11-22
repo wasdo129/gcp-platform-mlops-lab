@@ -121,6 +121,11 @@ init_lab_backend() {
     -backend-config="bucket=$PROJECT-llmops-tfstate" -backend-config="prefix=llmops/gke-lab"
 }
 
+cleanup_lifecycle() {
+  if [[ -n "$WORK_DIR" ]]; then rm -rf -- "$WORK_DIR"; fi
+  rmdir "$LAB_DIR/lifecycle.lock"
+}
+
 begin_lifecycle() {
   umask 077
   mkdir -p "$LAB_DIR"
@@ -128,7 +133,7 @@ begin_lifecycle() {
   chmod 700 "$LAB_DIR"
   mkdir "$LAB_DIR/lifecycle.lock" || die "Another lab operation may be active."
   WORK_DIR=''
-  trap 'if [[ -n "$WORK_DIR" ]]; then rm -rf -- "$WORK_DIR"; fi; rmdir "$LAB_DIR/lifecycle.lock"' EXIT
+  trap cleanup_lifecycle EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   WORK_DIR=$(mktemp -d "$LAB_DIR/operation.XXXXXXXX")

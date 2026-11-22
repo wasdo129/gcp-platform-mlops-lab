@@ -54,3 +54,11 @@ output "state_bucket_name" {
 output "artifact_bucket_name" {
   value = google_storage_bucket.artifacts.name
 }
+
+resource "google_storage_bucket_iam_member" "mlflow_artifacts" {
+  for_each = toset(["roles/storage.objectCreator", "roles/storage.objectViewer"])
+
+  bucket = google_storage_bucket.artifacts.name
+  role   = each.value
+  member = "principal://iam.googleapis.com/projects/209948772676/locations/global/workloadIdentityPools/${local.project}.svc.id.goog/subject/ns/ml-platform/sa/mlflow"
+}

@@ -52,3 +52,26 @@ jobs:
           actionlint
       - name: Helm and Kubernetes schemas
         run: scripts/validate-gitops.sh
+      - name: Native AMD64 MLflow image smoke test
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          image=llmops-mlflow:ci
+          container=llmops-mlflow-ci
+          docker buildx build --platform linux/amd64 --load -t "$image" apps/mlflow
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = linux/amd64
+          docker run --rm --read-only --entrypoint python "$image" \
+            -c 'import os, mlflow, psycopg2, google.cloud.storage; assert os.getuid() == os.getgid() == 10001; assert mlflow.__version__ == "3.18.0"'
+          trap 'docker logs "$container" 2>/dev/null || true; docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" --read-only --tmpfs /tmp:rw,mode=1777 \
+            --cap-drop ALL --security-opt no-new-privileges -e MLFLOW_DISABLE_TELEMETRY=true \
+            "$image" --host=0.0.0.0 --workers=1 --serve-artifacts \
+            --backend-store-uri=sqlite:////tmp/mlflow.db --artifacts-destination=/tmp/artifacts
+          for attempt in {1..30}; do
+            if docker exec "$container" python -c 'from urllib.request import urlopen; urlopen("http://127.0.0.1:5000/health", timeout=2)'; then
+              break
+            fi
+            test "$attempt" != 30
+            sleep 2
+          done
+          docker exec -i "$container" python - http://127.0.0.1:5000 < scripts/mlflow-smoke.py

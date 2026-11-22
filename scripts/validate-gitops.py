@@ -33,10 +33,37 @@ def validate_mlflow_overrides() -> None:
             output = subprocess.check_output(["kubectl", "kustomize", str(overlay)], text=True)
             deployment = next(doc for doc in yaml.safe_load_all(output) if doc["kind"] == "Deployment")
             spec = deployment["spec"]
-            image = spec["template"]["spec"]["containers"][0]["image"]
+            pod = spec["template"]["spec"]
+            mlflow = next(container for container in pod["containers"] if container["name"] == "mlflow")
+            image = mlflow["image"]
             if spec["replicas"] != replicas or image != f"{registry_image}@{digest}":
                 raise ValueError("MLflow replica or digest override did not affect the Deployment.")
-    print("Validated MLflow Kustomize overrides for start and teardown")
+            if mlflow["resources"]["limits"].get("memory") != "1536Mi":
+                raise ValueError("MLflow must retain its explicit 1536Mi memory limit.")
+            for probe_name in ("startupProbe", "readinessProbe", "livenessProbe"):
+                probe = mlflow[probe_name]
+                http = probe["httpGet"]
+                if (
+                    probe.get("timeoutSeconds") != 5
+                    or http.get("path") != "/health"
+                    or http.get("port") != "http"
+                    or {"name": "Host", "value": "localhost"} not in http.get("httpHeaders", [])
+                ):
+                    raise ValueError(f"Unexpected MLflow HTTP settings for {probe_name}.")
+            security = {**pod["securityContext"], **mlflow["securityContext"]}
+            if (
+                pod.get("serviceAccountName") != "mlflow"
+                or pod.get("automountServiceAccountToken") is not False
+                or security.get("runAsNonRoot") is not True
+                or min(security.get("runAsUser", 0), security.get("runAsGroup", 0)) <= 0
+                or security.get("seccompProfile", {}).get("type") != "RuntimeDefault"
+                or security.get("allowPrivilegeEscalation") is not False
+                or security.get("readOnlyRootFilesystem") is not True
+                or security.get("privileged", False) is not False
+                or security.get("capabilities") != {"drop": ["ALL"]}
+            ):
+                raise ValueError("MLflow security settings have been weakened.")
+    print("Validated MLflow digest, replica overrides, resources, probes and security settings")
 
 
 def main() -> None:

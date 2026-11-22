@@ -116,3 +116,27 @@ gcloud storage cat "gs://project-557b18ac-4cdc-4a40-b3e-ml-artifacts/mlflow/$exp
 ```
 
 Expect one SQL row with the reported marker, status `FINISHED` and metric `1`. Expect the GCS content hash to match the SDK download. This is the Phase 3 completion criterion. Cluster recreation and restore of MLflow records are a separate exercise.
+
+## Troubleshoot unstable MLflow pods
+
+Use read-only checks to distinguish a container OOM from a failed HTTP probe or a scheduling problem. `Deployment does not have minimum availability` means the replica is unavailable. Inspect the pod to identify the cause.
+
+```bash
+export KUBECONFIG="$HOME/.llmops-lab/lab.kubeconfig"
+kubectl -n argocd get application mlflow
+kubectl -n ml-platform describe deployment mlflow
+kubectl -n ml-platform get pods -l app=mlflow
+kubectl -n ml-platform get pods -l app=mlflow -o json | jq '
+  .items[] | {pod: .metadata.name, containers: [.status.containerStatuses[]? |
+    select(.name == "mlflow") | {ready, restartCount, state, terminated: .lastState.terminated}]}'
+kubectl -n ml-platform get events --sort-by=.lastTimestamp
+kubectl top nodes
+kubectl -n ml-platform top pods -l app=mlflow --containers
+kubectl describe node
+```
+
+- For `OOMKilled`, correlate `lastState.terminated.finishedAt` with events and any historical container memory metrics. Use `kubectl -n ml-platform logs POD_NAME -c mlflow --previous` for the previous container instance if it exists. `kubectl top` reports recent sampled usage and cannot recover the peak that preceded the OOM. Check node `MemoryPressure` and eviction events as well.
+- For `Liveness probe failed`, read events for the exact HTTP error and inspect current logs. Compare the timing with CPU usage. The probes allow 5 seconds per request. Startup gates readiness and liveness for about five minutes. After startup, five consecutive liveness failures at 10-second intervals trigger a restart in roughly 40–50 seconds from the first failure, plus any termination grace period. Readiness can withdraw traffic independently.
+- For an unavailable Deployment with a Pending pod, look for `FailedScheduling` and check allocatable resources and requests. The MLflow requests are 250m CPU and 768Mi memory with a 1536Mi memory limit. Check for continuing CPU saturation or memory growth before raising the limit again.
+
+After review and deployment approval, publish and check out the reviewed Git commit. Run `scripts/mlflow-up.sh "$(git rev-parse HEAD)" "$LLMOPS_MLFLOW_IMAGE"` with the same published image digest used by the existing release. The `Recreate` strategy replaces the single pod and can cause a brief interruption. After rollout, confirm Argo CD reports the intended SHA and `Synced / Healthy`, the Deployment has one available replica, and the new pod's restart count stays flat for at least 15 minutes including the SDK smoke test above. Verify PostgreSQL and GCS independently. If failures recur, collect termination evidence and events before deciding whether to reselect the previous Git SHA with the same digest. [Kubernetes probe behavior](https://kubernetes.io/docs/concepts/workloads/pods/probes/)

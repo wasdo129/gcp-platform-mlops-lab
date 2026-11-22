@@ -38,8 +38,8 @@ def validate_mlflow_overrides() -> None:
             image = mlflow["image"]
             if spec["replicas"] != replicas or image != f"{registry_image}@{digest}":
                 raise ValueError("MLflow replica or digest override did not affect the Deployment.")
-            if mlflow["resources"]["limits"].get("memory") != "1536Mi":
-                raise ValueError("MLflow must retain its explicit 1536Mi memory limit.")
+            if mlflow["resources"]["limits"].get("memory") != "2Gi":
+                raise ValueError("MLflow must retain its explicit 2Gi memory limit.")
             for probe_name in ("startupProbe", "readinessProbe", "livenessProbe"):
                 probe = mlflow[probe_name]
                 http = probe["httpGet"]

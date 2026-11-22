@@ -37,12 +37,21 @@ spec:
             - --artifacts-destination=gs://project-557b18ac-4cdc-4a40-b3e-ml-artifacts/mlflow
           env:
             - name: MLFLOW_BACKEND_STORE_URI
+              value: postgresql+psycopg2://mlflow-postgres-rw:5432/mlflow
+            - name: PGUSER
               valueFrom:
                 secretKeyRef:
                   name: mlflow-postgres-app
-                  key: uri
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-postgres-app
+                  key: password
             - name: PGSSLMODE
-              value: require
+              value: verify-full
+            - name: PGSSLROOTCERT
+              value: /etc/mlflow/postgres/ca.crt
             - name: MLFLOW_SERVER_ALLOWED_HOSTS
               value: "localhost,localhost:*,127.0.0.1,127.0.0.1:*,mlflow,mlflow:*,mlflow.ml-platform.svc:*,mlflow.ml-platform.svc.cluster.local:*"
             - name: MLFLOW_DISABLE_TELEMETRY
@@ -58,6 +67,9 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: postgres-ca
+              mountPath: /etc/mlflow/postgres
+              readOnly: true
           startupProbe:
             httpGet:
               path: /health
@@ -93,3 +105,9 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
+        - name: postgres-ca
+          secret:
+            secretName: mlflow-postgres-ca
+            items:
+              - key: ca.crt
+                path: ca.crt

@@ -4,6 +4,8 @@ set -euo pipefail
 source "$(dirname "$0")/lab-common.sh"
 # shellcheck source=scripts/postgres-restore.sh
 source "$REPO/scripts/postgres-restore.sh"
+# shellcheck source=scripts/mlflow-common.sh
+source "$REPO/scripts/mlflow-common.sh"
 
 [[ $# == 2 || $# == 3 ]] ||
   die "Usage: $0 --allow-public-node-egress GIT_COMMIT_SHA [BACKUP.dump]"
@@ -13,8 +15,7 @@ revision=$2
 archive=${3-}
 mlflow_image=${LLMOPS_MLFLOW_IMAGE:-}
 if [[ -n "$mlflow_image" ]]; then
-  [[ "$mlflow_image" =~ ^[a-z0-9][a-z0-9._:/-]*/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$ ]] ||
-    die "LLMOPS_MLFLOW_IMAGE must be a registry image reference pinned by SHA-256 digest."
+  check_mlflow_release "$revision" "$mlflow_image"
 fi
 if [[ $# == 3 ]]; then
   [[ -f "$archive" && -s "$archive" && -r "$archive" && ! -L "$archive" ]] ||
@@ -27,15 +28,12 @@ begin_lifecycle
 
 # Check GitHub visibility before starting any billable resources.
 raw="https://raw.githubusercontent.com/wasdo129/gcp-platform-mlops-lab/$revision"
-manifests=(argocd/config.yaml cloudnative-pg/cluster.yaml smoke/deployment.yaml)
-if [[ -n "$mlflow_image" ]]; then
-  manifests+=(mlflow/deployment.yaml mlflow/service.yaml mlflow/service-account.yaml mlflow/kustomization.yaml)
-fi
-for manifest in "${manifests[@]}"; do
+for manifest in argocd/config.yaml cloudnative-pg/cluster.yaml smoke/deployment.yaml; do
   curl -fsSL --max-time 20 "$raw/gitops/apps/$manifest" -o "$WORK_DIR/source.yaml"
   cmp -s "$WORK_DIR/source.yaml" "$REPO/gitops/apps/$manifest" ||
     die "Local manifest differs from the published revision: $manifest"
 done
+if [[ -n "$mlflow_image" ]]; then check_mlflow_source "$revision"; fi
 helm show chart argo-cd --repo https://argoproj.github.io/argo-helm --version 10.17.2 >/dev/null
 helm show chart cloudnative-pg --repo https://cloudnative-pg.github.io/charts --version 0.29.2 >/dev/null
 
@@ -135,23 +133,10 @@ fi
 [[ $(sql mlflow 'SELECT current_database()') == mlflow ]] || die "Database connectivity verification failed."
 
 if [[ -n "$mlflow_image" ]]; then
-  sed -e "s/@GIT_REVISION@/$revision/g" -e "s|@MLFLOW_IMAGE@|$mlflow_image|g" \
-    "$REPO/gitops/applications/mlflow.yaml" | k apply -f -
-  # A previous cancelled teardown can leave Argo CD's desired replicas at zero.
-  k -n argocd patch application mlflow --type=merge \
-    -p '{"spec":{"source":{"kustomize":{"replicas":[{"name":"mlflow","count":1}]}}}}'
-  wait_app mlflow "$revision"
-  k -n "$NAMESPACE" rollout status deployment/mlflow --timeout=180s
-  k -n "$NAMESPACE" get deployment mlflow -o json |
-    jq -e --arg image "$mlflow_image" '.spec.replicas == 1 and .status.readyReplicas == 1 and
-      any(.spec.template.spec.containers[]; .name == "mlflow" and .image == $image)' >/dev/null ||
-    die "MLflow is not ready at the requested image digest."
+  rollout_mlflow "$revision" "$mlflow_image"
 fi
 
 k get nodes
 k -n argocd get applications
 k -n "$NAMESPACE" get cluster,pods,pvc
 printf 'Database ready.\n'
-if [[ -n "$mlflow_image" ]]; then
-  printf 'MLflow rollout ready. Run the SDK smoke test to verify PostgreSQL and GCS.\n'
-fi

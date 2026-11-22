@@ -45,8 +45,8 @@ jobs:
       - name: Shell and YAML
         run: |
           for script in scripts/*.sh; do bash -n "$script"; done
-          shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops}.sh
-          shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops}.sh
+          shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up}.sh
+          shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up,mlflow-common}.sh
           yamllint -d '{extends: default, rules: {document-start: disable, line-length: disable}}' gitops .github/workflows
           python -m py_compile scripts/mlflow-smoke.py
           actionlint

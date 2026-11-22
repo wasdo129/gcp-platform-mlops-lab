@@ -22,20 +22,63 @@ uv pip compile --python-version 3.12 --python-platform x86_64-manylinux_2_28 \
   -o apps/mlflow/requirements.lock apps/mlflow/requirements.in
 ```
 
-## After separate publication and IAM approval
-
-Publish the reviewed branch or merge commit and the Linux AMD64 image to a registry readable by the GKE nodes. Obtain the published image digest. Review the foundation plan for the additive `google_storage_bucket_iam_member.mlflow_artifacts` binding. It grants the `ml-platform/mlflow` Kubernetes identity object read, list, write and delete access on the artifacts bucket. Keep the name-based identity unique to trusted lab clusters within this project. The pod obtains credentials through the GKE metadata server and consumes the CNPG application URI through a Secret reference. PostgreSQL transport requires TLS through libpq. The tracking service is unauthenticated within the lab network. Use localhost port forwarding for operator access and restrict access to the cluster.
-
-Enable MLflow by passing the image digest to the existing lab workflow. On a running, Terraform-managed lab, review the proposed no-op infrastructure plan before proceeding. The script checks PostgreSQL initialization before creating or resuming the Application. Stop and back up writers before changing MLflow versions. Review schema migrations separately.
+Run the local image with the same UID and a read-only root filesystem:
 
 ```bash
-export LLMOPS_MLFLOW_IMAGE=REGISTRY/REPOSITORY/mlflow@sha256:IMAGE_DIGEST
-scripts/gke-up.sh --allow-public-node-egress "$(git rev-parse HEAD)"
+docker run --rm --platform linux/amd64 --entrypoint python llmops-mlflow:3.18.0 \
+  -c 'import os, mlflow, psycopg2, google.cloud.storage; assert os.getuid() == 10001; assert mlflow.__version__ == "3.18.0"'
+docker run --rm -d --name llmops-mlflow-local --platform linux/amd64 \
+  --read-only --tmpfs /tmp:rw,mode=1777 -p 127.0.0.1:15000:5000 \
+  llmops-mlflow:3.18.0 --host=0.0.0.0 --workers=1 --serve-artifacts \
+  --backend-store-uri=sqlite:////tmp/mlflow.db --artifacts-destination=/tmp/artifacts
+curl --retry 20 --retry-connrefused --retry-delay 2 -fsS http://127.0.0.1:15000/health
+docker stop llmops-mlflow-local
 ```
 
-Teardown sets the Application's desired replica count to zero and waits for its pods to terminate before taking the PostgreSQL backup. If teardown is cancelled after quiescing the database, verify data and reopen the database using the [lifecycle runbook](lifecycle.md) before rerunning startup with the same image digest.
+## 1. Publish the reviewed image after approval
 
-## Live acceptance
+Use an approved Docker-format Artifact Registry repository. The operator needs repository writer access and the GKE **node** service account needs repository reader access. The MLflow Kubernetes ServiceAccount is used for GCS. Confirm the repository name and permissions before pushing. Repository creation and permission changes require separate approval if missing.
+
+```bash
+project=project-557b18ac-4cdc-4a40-b3e
+region=europe-west3
+registry_repo=llmops-images  # Replace with the approved existing repository name.
+gcloud artifacts repositories describe "$registry_repo" --location "$region" --project "$project"
+gcloud auth configure-docker "$region-docker.pkg.dev"
+image="$region-docker.pkg.dev/$project/$registry_repo/mlflow"
+tag="3.18.0-$(git rev-parse --short HEAD)"
+docker buildx build --platform linux/amd64 --load -t "$image:$tag" apps/mlflow
+docker push "$image:$tag"
+digest=$(gcloud artifacts docker images describe "$image:$tag" --project "$project" \
+  --format='value(image_summary.digest)')
+printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+export LLMOPS_MLFLOW_IMAGE="$image@$digest"
+```
+
+## 2. Apply bucket IAM after approval
+
+Use the Terraform foundation state that already owns the artifacts bucket. Review the entire plan and proceed only if it adds the two MLflow member grants and makes no unrelated changes. The `ml-platform/mlflow` identity can create, get and list objects in the artifact bucket. Use unique artifact paths because the identity cannot overwrite or delete existing objects. The name-based identity persists across lab clusters in the same workload pool. [Cloud Storage roles](https://docs.cloud.google.com/storage/docs/access-control/iam-roles)
+
+```bash
+umask 077
+terraform -chdir=infra/terraform/foundation init -input=false -lockfile=readonly
+terraform -chdir=infra/terraform/foundation plan -out=mlflow-iam.tfplan
+terraform -chdir=infra/terraform/foundation show mlflow-iam.tfplan
+# After approving the specific IAM changes in this plan:
+terraform -chdir=infra/terraform/foundation apply mlflow-iam.tfplan
+```
+
+## 3. Deploy to the existing GKE cluster after approval
+
+Use the published Git SHA checked out locally and the published image digest from step 1. The command uses the lab kubeconfig and checks the initialized PostgreSQL identity before submitting the Argo CD Application. It uses no Terraform. The pod mounts only the CNPG public CA certificate. Libpq verifies both the CA and the CNPG RW service hostname using `verify-full`. The tracking Service is unauthenticated inside the lab network. Keep operator access on localhost with port forwarding.
+
+```bash
+scripts/mlflow-up.sh "$(git rev-parse HEAD)" "$LLMOPS_MLFLOW_IMAGE"
+```
+
+Teardown waits for Argo CD to reconcile zero desired replicas and for the MLflow pods to disappear before the PostgreSQL backup. If teardown is interrupted before destroy starts, the script reports that MLflow may be paused and the database may still be closed. Verify the cluster and database first, reopen PostgreSQL if needed using the [lifecycle runbook](lifecycle.md), then rerun `scripts/mlflow-up.sh` with the same digest. If destroy started, inspect GKE and Terraform state before any recovery attempt.
+
+## 4. Verify PostgreSQL, GCS and the SDK
 
 In one terminal, forward the internal Service:
 

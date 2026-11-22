@@ -90,11 +90,25 @@ export KUBECONFIG="$HOME/.llmops-lab/lab.kubeconfig"
 kubectl -n ml-platform port-forward --address 127.0.0.1 svc/mlflow 5000:5000
 ```
 
-In another terminal with MLflow 3.18.0 installed, run:
+In another terminal, create a Python 3.12 virtual environment and install the pinned lightweight SDK. The SDK sends artifact requests to the server and needs no GCS driver or Google credentials. The server's Linux lock includes PostgreSQL and GCS dependencies, so keep it for building the server image.
+
+```bash
+mkdir -p "$HOME/.venvs"
+python3.12 -m venv "$HOME/.venvs/llmops-mlflow"
+. "$HOME/.venvs/llmops-mlflow/bin/activate"
+python -m pip install 'mlflow-skinny==3.18.0'
+curl -fsS --max-time 5 http://127.0.0.1:5000/health
+```
+
+After approving the test writes, run:
 
 ```bash
 python scripts/mlflow-smoke.py http://127.0.0.1:5000
 ```
+
+A refused connection inside the pod or a lost port-forward warrants checking the selected pod's readiness, restart count, last termination, and events using the troubleshooting commands below. The server may have stopped listening while Kubernetes was restarting it. Wait for a stable Ready pod, then start a new port-forward. If local port 5000 is already in use, use `15000:5000` and target `http://127.0.0.1:15000` for both checks.
+
+The script checks `/health` before creating a unique experiment and run, uses a 10-second SDK HTTP timeout with retries disabled, and emits success JSON only after verifying metadata, terminal status and the downloaded file hash. Failed runs and remote test data remain available for inspection. If the server is unreachable during cleanup, a run can remain open.
 
 Record the reported run ID, marker, artifact URI and SHA-256. Verify independently that the metadata and object landed in the configured backends. Use the same lab kubeconfig for the SQL query. Use an authorized operator identity to inspect GCS.
 

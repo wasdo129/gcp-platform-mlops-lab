@@ -64,7 +64,7 @@ kubectl -n ml-platform get cluster,pods,pvc
 kubectl -n argocd port-forward svc/argocd-server 8080:443
 ```
 
-Use `https://localhost:8080` for Argo CD. Handle the initial admin secret as sensitive. The database endpoint is `mlflow-postgres-rw.ml-platform.svc`. MLflow starts in Phase 3 only after backup/restore verification.
+Use `https://localhost:8080` for Argo CD. Handle the initial admin secret as sensitive. The database endpoint is `mlflow-postgres-rw.ml-platform.svc`. To enable MLflow after image and IAM approval, see the [Phase 3 runbook](mlflow.md). Startup verifies the database initialization gate before rolling out MLflow.
 
 ## 4. Back up and remove the lab
 

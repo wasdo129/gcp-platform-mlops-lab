@@ -26,6 +26,10 @@ jobs:
           sudo apt-get install -y shellcheck shfmt
           python -m pip install PyYAML==6.0.3 jsonschema==4.26.0 yamllint==1.38.0
           mkdir -p "$RUNNER_TEMP/lab-bin"
+          curl -fsSL https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl -o "$RUNNER_TEMP/lab-bin/kubectl"
+          curl -fsSL https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl.sha256 -o "$RUNNER_TEMP/kubectl.sha256"
+          echo "$(cat "$RUNNER_TEMP/kubectl.sha256")  $RUNNER_TEMP/lab-bin/kubectl" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/lab-bin/kubectl"
           curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz |
             tar -xz -C "$RUNNER_TEMP/lab-bin" kubeconform
           curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz |
@@ -44,6 +48,7 @@ jobs:
           shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops}.sh
           shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops}.sh
           yamllint -d '{extends: default, rules: {document-start: disable, line-length: disable}}' gitops .github/workflows
+          python -m py_compile scripts/mlflow-smoke.py
           actionlint
       - name: Helm and Kubernetes schemas
         run: scripts/validate-gitops.sh

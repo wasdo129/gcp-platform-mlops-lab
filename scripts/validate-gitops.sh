@@ -19,3 +19,5 @@ helm template cloudnative-pg "$charts/cloudnative-pg-0.29.2.tgz" -n cnpg-system 
 python3 scripts/validate-gitops.py "$rendered/argocd.yaml" "$rendered/cnpg.yaml"
 kubeconform -strict -summary -kubernetes-version 1.36.0 \
   gitops/apps/argocd/config.yaml gitops/apps/smoke/deployment.yaml
+kubectl kustomize gitops/apps/mlflow >"$rendered/mlflow.yaml"
+kubeconform -strict -summary -kubernetes-version 1.36.0 "$rendered/mlflow.yaml"

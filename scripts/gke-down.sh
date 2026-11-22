@@ -20,6 +20,34 @@ printf 'Stop client workloads and verify that other administrators have stopped 
 confirm "QUIESCE $CLUSTER/$NAMESPACE/mlflow"
 prepare_postgres
 [[ $(database_identity) == "$identity" ]] || die "Target database changed during confirmation."
+# Set Argo's desired replica count so self-heal cannot undo the shutdown.
+app=$(k -n argocd get application mlflow --ignore-not-found -o json)
+if [[ -n "$app" ]]; then
+  jq -e --arg ns "$NAMESPACE" '
+    .spec.source.path == "gitops/apps/mlflow" and .spec.destination.namespace == $ns
+  ' <<<"$app" >/dev/null || die "Unexpected MLflow Application spec."
+  k -n argocd patch application mlflow --type=merge \
+    -p '{"spec":{"source":{"kustomize":{"replicas":[{"name":"mlflow","count":0}]}}}}'
+fi
+
+assert_mlflow_stopped() {
+  local deployment pods
+  deployment=$(k -n "$NAMESPACE" get deployment mlflow --ignore-not-found -o json) ||
+    die "Could not check the MLflow Deployment."
+  pods=$(k -n "$NAMESPACE" get pods -l app=mlflow -o json) ||
+    die "Could not check the MLflow Pods."
+  [[ -z "$deployment" ]] || jq -e '.spec.replicas == 0' <<<"$deployment" >/dev/null || return 1
+  jq -e '.items | length == 0' <<<"$pods" >/dev/null
+}
+
+for attempt in {1..60}; do
+  if assert_mlflow_stopped; then
+    break
+  fi
+  [[ -n "$app" ]] || die "An MLflow workload exists without the managed Application."
+  [[ "$attempt" != 60 ]] || die "MLflow did not stop. Inspect Argo CD before retrying."
+  sleep 2
+done
 freeze_writes
 archive=$(backup_database)
 verify_archive "$archive"
@@ -48,6 +76,7 @@ confirm "DESTROY $PROJECT/$ZONE/$CLUSTER"
 prepare_postgres
 [[ $(database_identity) == "$identity" ]] || die "Target database changed since the backup."
 assert_frozen
+assert_mlflow_stopped || die "MLflow resumed after backup."
 # Apply exactly the reviewed destroy plan. Foundation is a separate root and state.
 tf apply -input=false -lock-timeout=30s "$WORK_DIR/destroy.tfplan"
 remaining=$(gcloud container clusters list --project="$PROJECT" \

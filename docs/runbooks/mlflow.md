@@ -35,17 +35,33 @@ curl --retry 20 --retry-connrefused --retry-delay 2 -fsS http://127.0.0.1:15000/
 docker stop llmops-mlflow-local
 ```
 
-## 1. Publish the reviewed image after approval
+## 1. Review and apply foundation changes after approval
 
-Use an approved Docker-format Artifact Registry repository. The operator needs repository writer access and the GKE **node** service account needs repository reader access. The MLflow Kubernetes ServiceAccount is used for GCS. Confirm the repository name and permissions before pushing. Repository creation and permission changes require separate approval if missing.
+Use the existing foundation state that owns the artifacts bucket. Review the full plan. If Artifact Registry and the Phase 3 bindings have never been applied, expect four creates: the private regional Docker repository `llmops-images`, its repository-scoped Reader grant for `gke-lab-nodes`, and the two GCS grants for `ml-platform/mlflow`. If the GCS grants are already managed, only the repository and Reader grant should be added. Stop if the plan modifies or deletes any existing resource or creates another resource.
+
+The GCS identity can create, get and list objects in the artifact bucket. Use unique artifact paths because the identity cannot overwrite or delete existing objects. The name-based identity persists across lab clusters in the same workload pool. [Cloud Storage roles](https://docs.cloud.google.com/storage/docs/access-control/iam-roles)
+
+```bash
+umask 077
+terraform -chdir=infra/terraform/foundation init -input=false -lockfile=readonly
+terraform -chdir=infra/terraform/foundation plan -out=mlflow-foundation.tfplan
+terraform -chdir=infra/terraform/foundation show mlflow-foundation.tfplan
+# After approving the exact saved plan:
+terraform -chdir=infra/terraform/foundation apply mlflow-foundation.tfplan
+```
+
+## 2. Publish the reviewed AMD64 image after approval
+
+Read the repository name and Docker prefix from the applied foundation outputs. The GKE node identity pulls images through its repository-scoped Reader role. The publishing identity needs existing write access to the repository. If write access is missing, stop and obtain separate approval for a repository-scoped Writer grant. The MLflow Kubernetes ServiceAccount uses its own identity for GCS.
 
 ```bash
 project=project-557b18ac-4cdc-4a40-b3e
 region=europe-west3
-registry_repo=llmops-images  # Replace with the approved existing repository name.
+registry_repo=$(terraform -chdir=infra/terraform/foundation output -raw artifact_registry_repository_name)
+repository_url=$(terraform -chdir=infra/terraform/foundation output -raw artifact_registry_repository_url)
 gcloud artifacts repositories describe "$registry_repo" --location "$region" --project "$project"
-gcloud auth configure-docker "$region-docker.pkg.dev"
-image="$region-docker.pkg.dev/$project/$registry_repo/mlflow"
+gcloud auth configure-docker "${repository_url%%/*}"
+image="$repository_url/mlflow"
 tag="3.18.0-$(git rev-parse --short HEAD)"
 docker buildx build --platform linux/amd64 --load -t "$image:$tag" apps/mlflow
 docker push "$image:$tag"
@@ -55,22 +71,9 @@ printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
 export LLMOPS_MLFLOW_IMAGE="$image@$digest"
 ```
 
-## 2. Apply bucket IAM after approval
-
-Use the Terraform foundation state that already owns the artifacts bucket. Review the entire plan and proceed only if it adds the two MLflow member grants and makes no unrelated changes. The `ml-platform/mlflow` identity can create, get and list objects in the artifact bucket. Use unique artifact paths because the identity cannot overwrite or delete existing objects. The name-based identity persists across lab clusters in the same workload pool. [Cloud Storage roles](https://docs.cloud.google.com/storage/docs/access-control/iam-roles)
-
-```bash
-umask 077
-terraform -chdir=infra/terraform/foundation init -input=false -lockfile=readonly
-terraform -chdir=infra/terraform/foundation plan -out=mlflow-iam.tfplan
-terraform -chdir=infra/terraform/foundation show mlflow-iam.tfplan
-# After approving the specific IAM changes in this plan:
-terraform -chdir=infra/terraform/foundation apply mlflow-iam.tfplan
-```
-
 ## 3. Deploy to the existing GKE cluster after approval
 
-Use the published Git SHA checked out locally and the published image digest from step 1. The command uses the lab kubeconfig and checks the initialized PostgreSQL identity before submitting the Argo CD Application. It uses no Terraform. The pod mounts only the CNPG public CA certificate. Libpq verifies both the CA and the CNPG RW service hostname using `verify-full`. The tracking Service is unauthenticated inside the lab network. Keep operator access on localhost with port forwarding.
+Use the published Git SHA checked out locally and the published image digest from step 2. The command uses the lab kubeconfig and checks the initialized PostgreSQL identity before submitting the Argo CD Application. It uses no Terraform. The pod mounts only the CNPG public CA certificate. Libpq verifies both the CA and the CNPG RW service hostname using `verify-full`. The tracking Service is unauthenticated inside the lab network. Keep operator access on localhost with port forwarding.
 
 ```bash
 scripts/mlflow-up.sh "$(git rev-parse HEAD)" "$LLMOPS_MLFLOW_IMAGE"

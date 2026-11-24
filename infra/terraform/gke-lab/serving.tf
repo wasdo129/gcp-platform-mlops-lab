@@ -32,7 +32,7 @@ resource "google_container_node_pool" "serving" {
     machine_type    = "e2-standard-4"
     service_account = local.node_account
     disk_type       = "pd-balanced"
-    disk_size_gb    = 30
+    disk_size_gb    = 50
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     labels          = { "llmops.workload" = "serving" }
 

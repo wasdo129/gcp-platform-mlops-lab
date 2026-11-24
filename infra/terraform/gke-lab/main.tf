@@ -71,6 +71,8 @@ resource "google_container_cluster" "lab" {
     disk_type       = "pd-balanced"
     disk_size_gb    = 30
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+    # GKE also reports the separately managed CPU pool tags in cluster.nodeConfig.
+    tags = ["llmops-lab-node"]
   }
 
   addons_config {

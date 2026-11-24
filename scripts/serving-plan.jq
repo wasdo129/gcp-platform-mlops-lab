@@ -1,4 +1,5 @@
-# Accept one exact serving-pool change and no managed drift.
+# Accept one exact serving-pool change and only reviewed read-side differences.
+include "serving-drift";
 def serving_identity:
   .project == $project and .location == $zone and .cluster == $cluster and .name == "serving";
 
@@ -8,7 +9,7 @@ and ((.action_invocations // []) | length == 0)
 and ((.deferred_action_invocations // []) | length == 0)
 and all(.resource_changes[]; .previous_address == null and .change.importing == null)
 and all((.output_changes // {})[]; .actions == ["no-op"])
-and ((.resource_drift // []) | length == 0)
+and known_serving_drift($project; $zone; $cluster)
 and (
   [.resource_changes[] | select(.mode == "managed" and .change.actions != ["no-op"])]
   | length == 1

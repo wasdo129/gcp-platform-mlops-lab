@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
 """Validate authored custom resources against the pinned charts' Kubernetes schemas."""
 
+import re
 import shutil
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
+from decimal import Decimal
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import jsonschema
 import yaml
+
+
+def binary_quantity_bytes(value: str) -> Decimal:
+    """Parse the BinarySI subset of Kubernetes memory quantities used by this lab."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGTPE]i)", value)
+    if match is None:
+        raise ValueError(f"Expected a binary Kubernetes memory quantity, got {value!r}.")
+    number, unit = match.groups()
+    return Decimal(number) * 1024 ** ("KMGTPE".index(unit[0]) + 1)
 
 
 def validate_mlflow_overrides() -> None:
@@ -38,8 +49,9 @@ def validate_mlflow_overrides() -> None:
             image = mlflow["image"]
             if spec["replicas"] != replicas or image != f"{registry_image}@{digest}":
                 raise ValueError("MLflow replica or digest override did not affect the Deployment.")
-            if mlflow["resources"]["limits"].get("memory") != "2560Mi":
-                raise ValueError("MLflow must retain its explicit 2560Mi memory limit.")
+            memory_limit = mlflow["resources"]["limits"].get("memory", "")
+            if binary_quantity_bytes(memory_limit) != 2560 * 1024**2:
+                raise ValueError(f"MLflow memory limit must equal 2560Mi, got {memory_limit}.")
             for probe_name in ("startupProbe", "readinessProbe", "livenessProbe"):
                 probe = mlflow[probe_name]
                 http = probe["httpGet"]

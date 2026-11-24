@@ -6,7 +6,7 @@ server:
     type: ClusterIP
   resources:
     requests:
-      cpu: 100m
+      cpu: 50m
       memory: 128Mi
 controller:
   resources:
@@ -16,17 +16,17 @@ controller:
 repoServer:
   resources:
     requests:
-      cpu: 150m
+      cpu: 75m
       memory: 192Mi
 applicationSet:
   resources:
     requests:
-      cpu: 75m
+      cpu: 25m
       memory: 128Mi
 redis:
   resources:
     requests:
-      cpu: 50m
+      cpu: 25m
       memory: 64Mi
 redisSecretInit:
   resources:

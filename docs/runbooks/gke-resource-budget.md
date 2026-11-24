@@ -41,15 +41,20 @@ kubectl -n argocd get applications
 kubectl describe node
 reviewed_sha=$(git rev-parse HEAD)
 test -z "$(git status --porcelain)"
-test "$reviewed_sha" = "$(git ls-remote origin refs/heads/phase-4/training | cut -f1)"
+# Deploy from reviewed main history so feature-branch deletion cannot orphan the pin.
+git fetch origin main
+git merge-base --is-ancestor "$reviewed_sha" origin/main
 old_smoke_sha=$(kubectl -n argocd get application cpu-smoke -o jsonpath='{.spec.source.targetRevision}')
+git merge-base --is-ancestor "$old_smoke_sha" origin/main
+kubectl -n argocd get applications -o json | jq -r '.items[] | [.metadata.name,.spec.source.targetRevision,.status.sync.revision,.status.sync.status,.status.health.status] | @tsv'
+kubectl -n ml-platform get pods -o json | jq -r '.items[] | [.metadata.name,.metadata.uid,([.status.containerStatuses[]?.restartCount] | add // 0)] | @tsv'
 umask 077
 rollback_dir=$(mktemp -d)
 helm -n argocd get values argocd -o yaml >"$rollback_dir/argo-values.yaml"
 git show "$reviewed_sha:gitops/bootstrap/values.yaml" >"$rollback_dir/argo-reviewed.yaml"
 ```
 
-Update CPU Smoke first. Its new 10m request fits the observed 15m headroom and releases 40m when the old pod exits. Wait for the old pod to terminate and verify at least 50m is free before Helm starts the pre-upgrade Redis Job. Do not submit training during these rollouts. CPU Smoke is the only Argo CD Application whose Git SHA changes here. Keep PostgreSQL, MLflow and the other Applications on their existing approved SHAs. The Helm values come from the same reviewed commit as CPU Smoke.
+Update CPU Smoke first. Its new 10m request fits the observed 15m headroom and releases 40m when the old pod exits. Wait for the old pod to terminate and verify at least 50m is free before Helm starts the pre-upgrade Redis Job. Do not submit training during these rollouts. The chart uses the Kubernetes rolling defaults for the four Deployments (`maxSurge: 25%`, `maxUnavailable: 25%`, which mean one extra pod and zero unavailable for one replica). The 50m pre-upgrade hook completes before Deployment updates begin. From 55m, at least one 25m replacement can schedule. When it becomes Ready and the old Redis or ApplicationSet pod exits, headroom reaches at least 80m, so the 75m repo-server replacement can fit. A 50m server replacement can also start from 55m and releases a net 50m on completion. Check actual strategies and pod readiness. If headroom drops below the hook request or a replacement gets stuck Pending, pause before retrying. CPU Smoke is the only Argo CD Application whose Git SHA changes here. Keep PostgreSQL, MLflow and the other Applications on their existing approved SHAs. The Helm values come from the same reviewed commit as CPU Smoke.
 
 ```bash
 git show "$reviewed_sha:gitops/applications/cpu-smoke.yaml" |
@@ -77,14 +82,33 @@ kubectl -n ml-platform top pod --containers
 kubectl -n ml-platform get events --sort-by=.lastTimestamp
 ```
 
+Before training, sample node and MLflow working set a few times under representative traffic. Require node free memory (allocatable minus sampled use) to cover 512Mi for the Job, any remaining MLflow growth toward 2560Mi, and at least 128Mi contingency. The recorded 1114Mi sample is below the resulting 1322Mi gate. Defer training if fresh measurements also fail it or are unavailable. Confirm CPU headroom is at least 100m and the node is Ready with MemoryPressure false.
+
+```bash
+kubectl get nodes -o custom-columns=NODE:.metadata.name,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory
+kubectl get nodes -o json | jq '.items[] | {node: .metadata.name, conditions: [.status.conditions[] | select(.type == "Ready" or .type == "MemoryPressure") | {type,status}]}'
+kubectl top nodes
+kubectl -n ml-platform top pods --containers
+kubectl -n ml-platform get pods -o json | jq '[.items[] | {name:.metadata.name,uid:.metadata.uid,reason:.status.reason,containers:[.status.containerStatuses[]? | {ready,restartCount,lastState}]}]'
+kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp
+```
+
+Repeat during rollout and training. Stop advancing if readiness drops, a restart count increases, a pod is evicted or OOM-killed, MemoryPressure becomes true, or remaining node memory falls below 128Mi. Investigate before retrying. Do not launch a second Job while one is active.
+
 ## Rollback after approval
 
-Wait for any training pod to exit and verify there is capacity for the 50m Helm hook. Reapply the saved values using the same chart version. A rolling rollback of repo-server can stall if a second 150m pod cannot fit. Use its chart-supported `Recreate` strategy for rollback so that Kubernetes releases the old request first. This can briefly interrupt manifest generation. Expect 55m of steady-state CPU headroom after restoring the original Helm requests while Smoke remains at 10m. Restore the old Smoke SHA last and confirm at least 50m is free for its replacement. If CPU headroom is still too small for a surge, leave Smoke on the reduced request until a separate maintenance window. Do not force replacement or recreate the cluster.
+Wait for any training pod to exit and verify capacity for the 50m Helm hook. Restore saved values with a temporary no-surge rolling strategy for repo-server (`maxSurge=0`, `maxUnavailable=1`). In the worst order, reverting the other three services leaves 130m free before repo-server rollback, short of the 150m needed for a surge. Releasing the current 75m repo-server first lets its replacement fit. Redis, ApplicationSet and server can still surge individually with at least 80m, 105m and 105m respectively before their own replacement. The temporary strategy keeps the Deployment type unchanged and can briefly interrupt manifest generation. Once healthy, reapply the saved values with hooks disabled to restore the original strategy without changing the pod template. Verify the effective strategy. Restore the old Smoke SHA last after checking at least 50m is free for its surge. Expected headroom with Smoke still at 10m is 55m.
 
 ```bash
 helm upgrade argocd argo-cd --repo https://argoproj.github.io/argo-helm \
   --version 10.17.2 -n argocd -f "$rollback_dir/argo-values.yaml" \
-  --set repoServer.deploymentStrategy.type=Recreate --wait --timeout 10m
+  --set repoServer.deploymentStrategy.type=RollingUpdate \
+  --set repoServer.deploymentStrategy.rollingUpdate.maxSurge=0 \
+  --set repoServer.deploymentStrategy.rollingUpdate.maxUnavailable=1 --wait --timeout 10m
+kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=3m
+helm upgrade argocd argo-cd --repo https://argoproj.github.io/argo-helm \
+  --version 10.17.2 -n argocd -f "$rollback_dir/argo-values.yaml" --no-hooks --wait --timeout 5m
+kubectl -n argocd get deployment argocd-repo-server -o jsonpath='{.spec.strategy}'
 kubectl describe node
 # If the old smoke pod cannot surge, defer this step.
 git show "$reviewed_sha:gitops/applications/cpu-smoke.yaml" |

@@ -21,3 +21,6 @@ kubeconform -strict -summary -kubernetes-version 1.36.0 \
   gitops/apps/argocd/config.yaml gitops/apps/smoke/deployment.yaml
 kubectl kustomize gitops/apps/mlflow >"$rendered/mlflow.yaml"
 kubeconform -strict -summary -kubernetes-version 1.36.0 "$rendered/mlflow.yaml"
+scripts/render-training-job.sh "example.invalid/lab/training@sha256:$(printf '%064d' 0)" \
+  >"$rendered/training.json"
+kubeconform -strict -summary -kubernetes-version 1.36.0 "$rendered/training.json"

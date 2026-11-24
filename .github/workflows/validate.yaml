@@ -45,8 +45,8 @@ jobs:
       - name: Shell and YAML
         run: |
           for script in scripts/*.sh; do bash -n "$script"; done
-          shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up}.sh
-          shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up,mlflow-common}.sh
+          shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up,render-training-job}.sh
+          shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up,mlflow-common,render-training-job}.sh
           yamllint -d '{extends: default, rules: {document-start: disable, line-length: disable}}' gitops .github/workflows
           python -m py_compile scripts/mlflow-smoke.py
           actionlint
@@ -75,3 +75,15 @@ jobs:
             sleep 2
           done
           docker exec -i "$container" python - http://127.0.0.1:5000 < scripts/mlflow-smoke.py
+      - name: Training image and unit tests
+        run: |
+          set -euo pipefail
+          image=llmops-iris-training:ci
+          docker buildx build --platform linux/amd64 --load -t "$image" apps/training
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,mode=1777 \
+            -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 -e MLFLOW_DISABLE_AGENT_HINT=1 \
+            --entrypoint python "$image" -c 'import os; assert os.getuid() == 10001'
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,mode=1777 \
+            -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 -e MLFLOW_DISABLE_AGENT_HINT=1 \
+            -v "$PWD/apps/training/test_train.py:/opt/training/test_train.py:ro" \
+            --entrypoint python "$image" -m unittest test_train

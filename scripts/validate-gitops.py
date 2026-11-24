@@ -78,6 +78,41 @@ def validate_mlflow_overrides() -> None:
     print("Validated MLflow digest, replica overrides, resources, probes and security settings")
 
 
+def validate_training_job() -> None:
+    image = "example.invalid/lab/training@sha256:" + "a" * 64
+    renderer = "scripts/render-training-job.sh"
+    job = yaml.safe_load(subprocess.check_output([renderer, image], text=True))
+    if (
+        job["kind"] != "Job"
+        or job["metadata"] != {"generateName": "iris-training-", "namespace": "ml-platform"}
+        or job["spec"]["backoffLimit"] != 0
+        or job["spec"]["activeDeadlineSeconds"] <= 0
+        or job["spec"]["ttlSecondsAfterFinished"] <= 0
+    ):
+        raise ValueError("Expected a bounded one-shot Job with a generated name.")
+    pod = job["spec"]["template"]["spec"]
+    training = next(container for container in pod["containers"] if container["name"] == "training")
+    security = {**pod["securityContext"], **training["securityContext"]}
+    if (
+        training["image"] != image
+        or pod.get("automountServiceAccountToken") is not False
+        or pod.get("restartPolicy") != "Never"
+        or pod.get("hostNetwork", False)
+        or security.get("runAsNonRoot") is not True
+        or min(security.get("runAsUser", 0), security.get("runAsGroup", 0)) <= 0
+        or security.get("seccompProfile", {}).get("type") != "RuntimeDefault"
+        or security.get("privileged", False)
+        or security.get("allowPrivilegeEscalation") is not False
+        or security.get("readOnlyRootFilesystem") is not True
+        or security.get("capabilities") != {"drop": ["ALL"]}
+        or any(volume.get("hostPath") for volume in pod.get("volumes", []))
+    ):
+        raise ValueError("Unexpected training image or pod security settings.")
+    if subprocess.run([renderer, "example.invalid/lab/training:latest"], capture_output=True).returncode != 2:
+        raise ValueError("The training renderer must reject a mutable image tag.")
+    print("Validated one-shot training Job, image digest and security settings")
+
+
 def main() -> None:
     schemas = {}
     for filename in sys.argv[1:]:
@@ -100,6 +135,7 @@ def main() -> None:
         print(f"Validated {manifest}")
 
     validate_mlflow_overrides()
+    validate_training_job()
 
 
 if __name__ == "__main__":

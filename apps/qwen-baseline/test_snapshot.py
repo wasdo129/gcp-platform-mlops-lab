@@ -42,3 +42,31 @@ class SnapshotTests(unittest.TestCase):
             lock = {"repository": "Qwen/model", "revision": "0" * 40, "files": {"../outside": {}}}
             with self.assertRaisesRegex(ValueError, "Invalid filename"):
                 MODULE.snapshot(lock, Path(directory), verify_only=True)
+
+    def test_recovery_and_cache_reuse(self):
+        content = b"locked fixture"
+        lock = {"repository": "Qwen/model", "revision": "0" * 40, "files": {
+            "asset": {"size": len(content), "sha256": hashlib.sha256(content).hexdigest()},
+        }}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(ValueError, "Unexpected size or type"):
+                MODULE.snapshot(lock, root, verify_only=True)
+            (root / "asset.part").write_bytes(b"interrupted")
+            with patch.object(MODULE, "urlopen", return_value=io.BytesIO(content)) as fetch:
+                MODULE.snapshot(lock, root)
+                MODULE.snapshot(lock, root)
+                self.assertEqual(fetch.call_count, 1)
+            (root / "asset").write_bytes(b"x" * len(content))
+            with patch.object(MODULE, "urlopen") as fetch:
+                with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                    MODULE.snapshot(lock, root)
+                fetch.assert_not_called()
+
+    def test_rejects_unlocked_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "chat_template.jinja").write_text("unlocked override")
+            lock = {"repository": "Qwen/model", "revision": "0" * 40, "files": {}}
+            with self.assertRaisesRegex(ValueError, "Unexpected snapshot entries"):
+                MODULE.snapshot(lock, root, verify_only=True)

@@ -1,6 +1,10 @@
 # Phase 5.1 Qwen3 CPU serving
 
-## Local baseline after download approval
+## Local FP32 baseline — DEFERRED (host memory gate)
+
+The complete snapshot passed size and SHA-256 verification. The last preflight had approximately 8.64 GiB available, below the 9.6 GiB gate. Full model loading and inference were deferred. The synthetic model benchmark only validates the measurement script.
+
+### Rerun after the memory gate passes
 
 The pinned [model lock](../../gitops/charts/qwen-serving/files/model-lock.json) contains the Apache-2.0 license, revision, sizes and SHA-256 hashes. The two weight hashes and tokenizer JSON hash come from Hugging Face LFS metadata. Hashes for the remaining configuration and license files were computed from the exact upstream revision. Total download is 4,079,434,577 bytes (3.80 GiB), excluding dependencies. Keep the snapshot and reports outside the checkout.
 
@@ -29,7 +33,7 @@ The upstream vLLM 0.34.0 CPU image is pinned in chart values. Registry metadata 
 
 ## Temporary pool, after separate infrastructure approval
 
-Use a reviewed checkout with the existing GCS backend and default workspace. Use the shared lifecycle lock and one operator to serialize approval, planning and application. Keep the platform provisioned with its current node egress setting. Verify the remote state cluster ID and inspect the live pool list before proceeding. For creation, ensure there is no existing `serving` pool in GKE or duplicate state. For removal, first complete application cleanup below and verify that no user workload remains scheduled on the pool. Use `mode=create` for creation or `mode=delete` for removal. The delete is a normal plan with the feature disabled. Neither operation targets the platform pool.
+Use a reviewed checkout with the existing GCS backend and default workspace. Use the shared lifecycle lock and one operator to serialize approval, planning and application. Keep the platform provisioned with its current node egress setting. Verify the remote state cluster ID and inspect the live pool list before proceeding. For creation, ensure there is no existing `serving` pool in GKE or duplicate state. For removal, first complete application cleanup below and verify that no user workload remains scheduled on the pool. Use `mode=create` for creation or `mode=delete` for removal. The delete is a normal plan with the feature disabled. The allowlist requires exactly one serving pool action with the expected project, zone, cluster and pool name. Any detected drift, deferred change, replacement or change to another managed resource stops the operation. A saved plan must still pass Terraform state locking and stale-plan checks at apply time. The shared local lock covers this checkout workflow. Coordinate with other operators before starting.
 
 ```bash
 (
@@ -44,11 +48,23 @@ Use a reviewed checkout with the existing GCS backend and default workspace. Use
 
   mode=create
   # For removal after workload cleanup, use mode=delete.
+  state_addresses=$(tf state list)
+  pool_inventory=$(gcloud container node-pools list --cluster="$CLUSTER" --zone="$ZONE" \
+    --project="$PROJECT" --format=json)
+  pool_count=$(jq -er 'if type == "array" then map(select(.name == "serving")) | length else error("invalid pool inventory") end' <<<"$pool_inventory")
   case "$mode" in
-    create) enabled=true ;;
+    create)
+      enabled=true
+      [[ "$pool_count" == 0 && "$state_addresses" != *"google_container_node_pool.serving["* ]] ||
+        die "Serving pool exists in GKE or state. Reconcile inventory first."
+      ;;
     delete)
       enabled=false
-      test -z "$(k -n argocd get application qwen-serving --ignore-not-found -o name)"
+      [[ "$pool_count" == 1 ]] &&
+        grep -Fxq 'google_container_node_pool.serving[0]' <<<"$state_addresses" ||
+        die "Serving pool must exist in both GKE and state before deleting."
+      serving_app=$(k -n argocd get application qwen-serving --ignore-not-found -o name)
+      test -z "$serving_app"
       k get deployment,service,pods -A -o json |
         jq -e 'all(.items[]; .metadata.namespace != "llm-serving")'
       serving_nodes=$(k get nodes -l cloud.google.com/gke-nodepool=serving -o json |
@@ -64,11 +80,8 @@ Use a reviewed checkout with the existing GCS backend and default workspace. Use
   plan="$WORK_DIR/serving.tfplan"
   tf plan -input=false -lock-timeout=30s -var=allow_public_node_egress=true \
     -var="enable_serving_pool=$enabled" -out="$plan"
-  tf show -json "$plan" | jq -e --arg operation "$mode" '
-    [.resource_changes[]? | select(.mode == "managed" and .change.actions != ["no-op"])]
-    | length == 1 and .[0].address == "google_container_node_pool.serving[0]"
-    and .[0].change.actions == [$operation]
-  '
+  tf show -json "$plan" | jq -e --arg operation "$mode" --arg project "$PROJECT" \
+    --arg zone "$ZONE" --arg cluster "$CLUSTER" -f scripts/serving-plan.jq
   tf show -no-color "$plan"
   confirm "$mode $PROJECT/$ZONE/$CLUSTER/serving"
   tf apply -input=false -lock-timeout=30s "$plan"
@@ -131,7 +144,7 @@ kubectl get --raw /api/v1/namespaces/ml-platform/services/http:mlflow:5000/proxy
 
 1. Use a separately approved GKE managed node replacement or observe a scheduled replacement on the serving pool only. Keep the Application, Deployment, Service and desired replica count in place. Record the replacement operation and watch the old node and Pod disappear. Leave the platform pool untouched.
 2. Confirm the new node has a different UID, is Ready, and inherits the same pool labels and taint. Confirm a different vLLM Pod UID and placement on that serving node. The Deployment controller must recover its replica without a manual resync or a change to the pinned Git SHA.
-3. The Pod's disk-backed `emptyDir` is lost on Pod replacement and is shared only across containers in that Pod. A container restart can reuse it. The init container on the new Pod fetches the same ~3.80 GiB snapshot and verifies every SHA-256 before the inference container starts. Record the successful init exit code and the `Verified` lines for every locked file. A missing file, hash mismatch or unavailable upstream must prevent readiness. With one replica, expect API downtime during node recovery, download and warm-up. [Kubernetes emptyDir lifecycle](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir)
+3. The Pod's disk-backed `emptyDir` is lost on Pod replacement and is shared only across containers in that Pod. A container restart can reuse it. The init container on the new Pod fetches the same ~3.80 GiB snapshot and verifies every SHA-256 before the inference container starts. Record the successful init exit code and the `Verified` lines for every locked file. A missing file is downloaded and verified before startup. A checksum mismatch, unexpected cache entry or unavailable upstream prevents readiness. An interrupted init may retry an expected partial download. A corrupted complete file fails closed until the Pod volume is replaced. Each init attempt is capped at 900 seconds and the deployment has a separate rollout deadline. With one replica, expect API downtime during node recovery, download and warm-up. [Kubernetes emptyDir lifecycle](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir)
 4. Require the same Deployment UID and generation, Service UID and ClusterIP, Git revision, model revision and vLLM digest. Wait for Deployment availability, a ready EndpointSlice on the new Pod and successful model listing, chat completion and SSE. A port-forward attached to the old Pod may close and can be restarted locally. Record time from node loss to readiness and first successful inference.
 5. During and after recovery, check PostgreSQL readiness and MLflow health. Compare platform node and Pod UIDs, readiness and restart counters. Require no unexpected platform restarts, migrations, OOM or eviction. Serving unavailability is expected within this test window.
 

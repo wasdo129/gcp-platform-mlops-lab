@@ -44,9 +44,19 @@ def snapshot(lock, directory, verify_only=False):
         raise ValueError("Snapshot directory cannot be a symlink")
     if not verify_only:
         directory.mkdir(parents=True, exist_ok=True)
-    for name, entry in lock["files"].items():
-        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", name):
+    files = lock["files"]
+    for name in files:
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", name) or name.endswith(".part"):
             raise ValueError(f"Invalid filename: {name}")
+
+    allowed = set(files)
+    if not verify_only:
+        allowed.update(f"{name}.part" for name in files if not (directory / name).exists())
+    unexpected = sorted(path.name for path in directory.iterdir() if path.name not in allowed)
+    if unexpected:
+        raise ValueError(f"Unexpected snapshot entries: {', '.join(unexpected)}")
+
+    for name, entry in files.items():
         path = directory / name
         if verify_only or path.exists() or path.is_symlink():
             verify(path, entry)

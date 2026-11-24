@@ -51,7 +51,8 @@ jobs:
           python -m py_compile scripts/mlflow-smoke.py
           actionlint
       - name: Serving offline tests
-        run: python -B -m unittest discover -s apps/qwen-baseline -p 'test_*.py'
+        run: |
+          python -B -m unittest discover -s apps/qwen-baseline -p 'test_*.py'
       - name: Helm and Kubernetes schemas
         run: scripts/validate-gitops.sh
       - name: Native AMD64 MLflow image smoke test

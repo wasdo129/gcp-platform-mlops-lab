@@ -6,6 +6,7 @@ variable "enable_serving_pool" {
 
 resource "google_container_node_pool" "serving" {
   count      = var.enable_serving_pool ? 1 : 0
+  project    = local.project
   name       = "serving"
   location   = local.zone
   cluster    = google_container_cluster.lab.name

@@ -18,7 +18,7 @@ state_addresses=$(tf state list)
 [[ "$state_addresses" != *"google_container_node_pool.serving["* ]] ||
   die "Remove the temporary serving pool before platform teardown. See docs/runbooks/qwen-serving.md."
 serving_pools=$(gcloud container node-pools list --cluster="$CLUSTER" --zone="$ZONE" --project="$PROJECT" --format=json)
-jq -e 'all(.[]; .name != "serving")' <<<"$serving_pools" >/dev/null ||
+jq -e 'type == "array" and all(.[]; .name != "serving")' <<<"$serving_pools" >/dev/null ||
   die "A serving pool is still live. Reconcile it with Terraform state before teardown."
 prepare_postgres
 
@@ -98,12 +98,12 @@ done
 
 tf plan -destroy -input=false -lock-timeout=30s -var=allow_public_node_egress=true -var=enable_serving_pool=false -out="$WORK_DIR/destroy.tfplan"
 tf show -json "$WORK_DIR/destroy.tfplan" | jq -e --arg project "$PROJECT" --arg zone "$ZONE" --arg cluster "$CLUSTER" '
-  [.resource_changes[]? | select(.change.actions == ["delete"])] as $deletes
+  [.resource_changes[]? | select(.mode == "managed" and .change.actions != ["no-op"])] as $deletes
   | any($deletes[]; .address == "google_container_cluster.lab" and
       .change.before.project == $project and .change.before.location == $zone and .change.before.name == $cluster)
-  and all($deletes[]; .address == "google_container_cluster.lab" or
+  and all($deletes[]; .change.actions == ["delete"] and (.address == "google_container_cluster.lab" or
     .address == "google_container_node_pool.cpu" or .address == "google_compute_firewall.cnpg_webhook" or
-    .address == "google_compute_network.lab" or .address == "google_compute_subnetwork.lab")
+    .address == "google_compute_network.lab" or .address == "google_compute_subnetwork.lab"))
 ' >/dev/null || die "Unexpected destructive plan."
 confirm "DESTROY $PROJECT/$ZONE/$CLUSTER"
 [[ -f "$archive" && ! -L "$archive" && $(shasum -a 256 <"$archive") == "$checksum" ]] ||

@@ -121,14 +121,112 @@ def tolerates_serving_taint(toleration: dict) -> bool:
     return toleration.get("key") == "llmops.workload" and toleration.get("value") == "serving"
 
 
+def validate_serving_deployment(deployment: dict) -> None:
+    spec = deployment["spec"]
+    pod = spec["template"]["spec"]
+    if spec.get("replicas", 1) > 1 or spec["strategy"]["type"] != "Recreate":
+        raise ValueError("Serving requires at most one replica and Recreate")
+    if "nodeName" in pod or any(pod.get(field) for field in ("hostNetwork", "hostPID", "hostIPC")):
+        raise ValueError("Serving must use pool placement without fixed node or host namespaces")
+    affinity = pod["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
+    required = [
+        {"key": "llmops.workload", "operator": "In", "values": ["serving"]},
+        {"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
+    ]
+    terms = affinity["nodeSelectorTerms"]
+    if not terms or any(not all(item in term.get("matchExpressions", []) for item in required) for term in terms):
+        raise ValueError("Every serving affinity term must require the pool label and AMD64")
+    toleration = {"key": "llmops.workload", "operator": "Equal", "value": "serving", "effect": "NoSchedule"}
+    if pod.get("tolerations") != [toleration]:
+        raise ValueError("Serving must use only the dedicated NoSchedule toleration")
+
+    name = deployment["metadata"]["name"]
+    if pod.get("automountServiceAccountToken") is not False or pod.get("serviceAccountName") != name:
+        raise ValueError("Serving must use its own ServiceAccount with token automount disabled")
+    identity = {
+        "runAsNonRoot": True, "runAsUser": 10001, "runAsGroup": 10001, "fsGroup": 10001,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+    if pod.get("securityContext") != identity:
+        raise ValueError("Serving requires its non-root UID/GID and RuntimeDefault seccomp")
+    if ([container["name"] for container in pod["containers"]] != ["vllm"]
+            or [container["name"] for container in pod.get("initContainers", [])] != ["snapshot"]
+            or pod.get("ephemeralContainers")):
+        raise ValueError("Expected only the snapshot init and vLLM containers")
+    serving, init = pod["containers"][0], pod["initContainers"][0]
+    if serving.get("command") or serving.get("args", [])[:1] != ["/models/qwen3"]:
+        raise ValueError("vLLM must serve the verified local model")
+    if [env for env in serving.get("env", []) if env["name"] == "HF_HUB_OFFLINE"] != [
+        {"name": "HF_HUB_OFFLINE", "value": "1"},
+    ]:
+        raise ValueError("vLLM must load the snapshot offline")
+    annotations = spec["template"]["metadata"].get("annotations", {})
+    if not re.fullmatch(r"[a-f0-9]{64}", annotations.get("checksum/snapshot", "")):
+        raise ValueError("Serving rollout must track the snapshot ConfigMap checksum")
+    security = {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}}
+    for container in (serving, init):
+        if not re.fullmatch(r"[a-z0-9./:_-]+@sha256:[a-f0-9]{64}", container["image"]):
+            raise ValueError("Serving images must be digest-pinned")
+        if container.get("securityContext") != security:
+            raise ValueError("Serving requires restricted container securityContext")
+
+    budgets = (
+        (serving, ("2500m", "6Gi", "6Gi"), ("3500m", "8Gi", "14Gi")),
+        (init, ("500m", "256Mi", "6Gi"), ("1", "1Gi", "14Gi")),
+    )
+    keys = ("cpu", "memory", "ephemeral-storage")
+    for container, requests, limits in budgets:
+        expected = {"requests": dict(zip(keys, requests)), "limits": dict(zip(keys, limits))}
+        if container.get("resources") != expected:
+            raise ValueError(f"Unexpected serving resource budget: {container['name']}")
+
+    for probe, timing in (("startupProbe", (10, 3, 60)), ("readinessProbe", (5, 3, 3)), ("livenessProbe", (15, 5, 4))):
+        expected = dict(zip(("periodSeconds", "timeoutSeconds", "failureThreshold"), timing))
+        expected["httpGet"] = {"path": "/health", "port": "http"}
+        if serving.get(probe) != expected:
+            raise ValueError(f"Unexpected serving probe: {probe}")
+    if init.get("command") != ["timeout", "900", "python", "-B", "/snapshot/model_snapshot.py"] or init.get("args") != [
+        "/snapshot/model-lock.json", "/models/qwen3",
+    ]:
+        raise ValueError("Serving must run the bounded verified snapshot init")
+
+    volumes = {
+        "snapshot": {"configMap": {"name": f"{name}-snapshot"}},
+        "models": {"emptyDir": {"sizeLimit": "12Gi"}},
+        "temp": {"emptyDir": {"sizeLimit": "1Gi"}},
+        "shm": {"emptyDir": {"medium": "Memory", "sizeLimit": "512Mi"}},
+    }
+    rendered_volumes = pod.get("volumes", [])
+    by_name = {volume["name"]: {key: value for key, value in volume.items() if key != "name"}
+               for volume in rendered_volumes}
+    if len(rendered_volumes) != len(volumes) or by_name != volumes:
+        raise ValueError("Unexpected serving volumes")
+    mounts = (
+        (serving, [
+            {"name": "models", "mountPath": "/models", "readOnly": True},
+            {"name": "temp", "mountPath": "/tmp"},
+            {"name": "shm", "mountPath": "/dev/shm"},
+        ]),
+        (init, [
+            {"name": "snapshot", "mountPath": "/snapshot", "readOnly": True},
+            {"name": "models", "mountPath": "/models"},
+        ]),
+    )
+    for container, expected in mounts:
+        if sorted(container.get("volumeMounts", []), key=lambda mount: mount["name"]) != sorted(
+            expected, key=lambda mount: mount["name"]
+        ) or container.get("volumeDevices"):
+            raise ValueError(f"Unexpected serving volume mounts: {container['name']}")
+
+
 def validate_serving_placement(resources: list[dict]) -> None:
-    serving_pod = None
+    serving = None
     for resource in resources:
         if resource["kind"] not in ("Deployment", "StatefulSet"):
             continue
         pod = resource["spec"]["template"]["spec"]
         if resource["metadata"]["name"] == "qwen-serving":
-            serving_pod = pod
+            serving = resource
         elif any(map(tolerates_serving_taint, pod.get("tolerations", []))):
             raise ValueError(f"Platform workload tolerates the serving taint: {resource['metadata']['name']}")
 
@@ -139,15 +237,13 @@ def validate_serving_placement(resources: list[dict]) -> None:
         if any(map(tolerates_serving_taint, pod.get("tolerations", []))):
             raise ValueError(f"Data workload tolerates the serving taint: {path}")
 
-    if serving_pod is None or "nodeName" in serving_pod:
-        raise ValueError("Serving must use pool placement without a fixed node name")
-    terms = serving_pod["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
-    pool_selector = {"key": "llmops.workload", "operator": "In", "values": ["serving"]}
-    if not terms or any(pool_selector not in term.get("matchExpressions", []) for term in terms):
-        raise ValueError("Each serving affinity term must require the dedicated pool label")
-    required_toleration = {"key": "llmops.workload", "operator": "Equal", "value": "serving", "effect": "NoSchedule"}
-    if serving_pod.get("tolerations") != [required_toleration]:
-        raise ValueError("Serving must use the dedicated NoSchedule toleration")
+    if serving is None:
+        raise ValueError("Serving Deployment is missing")
+    validate_serving_deployment(serving)
+    services = [item for item in resources if item["kind"] == "Service"
+                and item["metadata"]["name"] == "qwen-serving"]
+    if len(services) != 1 or services[0]["spec"].get("type", "ClusterIP") != "ClusterIP":
+        raise ValueError("Serving requires one private ClusterIP Service")
     print("Validated serving pool placement and platform taint isolation")
 
 

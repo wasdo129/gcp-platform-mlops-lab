@@ -16,7 +16,8 @@ python3 -c 'import sys, yaml; yaml.safe_dump(yaml.safe_load(sys.stdin)["spec"]["
 helm lint "$charts/cloudnative-pg-0.29.2.tgz" -f "$rendered/cnpg-values.yaml"
 helm template argocd "$charts/argo-cd-10.17.2.tgz" -n argocd --include-crds -f gitops/bootstrap/values.yaml >"$rendered/argocd.yaml"
 helm template cloudnative-pg "$charts/cloudnative-pg-0.29.2.tgz" -n cnpg-system --include-crds -f "$rendered/cnpg-values.yaml" >"$rendered/cnpg.yaml"
-python3 scripts/validate-gitops.py "$rendered/argocd.yaml" "$rendered/cnpg.yaml"
+helm template qwen-serving gitops/charts/qwen-serving -n llm-serving >"$rendered/qwen.yaml"
+python3 scripts/validate-gitops.py "$rendered/argocd.yaml" "$rendered/cnpg.yaml" "$rendered/qwen.yaml"
 kubeconform -strict -summary -kubernetes-version 1.36.0 \
   gitops/apps/argocd/config.yaml gitops/apps/smoke/deployment.yaml
 kubectl kustomize gitops/apps/mlflow >"$rendered/mlflow.yaml"
@@ -24,3 +25,6 @@ kubeconform -strict -summary -kubernetes-version 1.36.0 "$rendered/mlflow.yaml"
 scripts/render-training-job.sh "example.invalid/lab/training@sha256:$(printf '%064d' 0)" \
   >"$rendered/training.json"
 kubeconform -strict -summary -kubernetes-version 1.36.0 "$rendered/training.json"
+helm lint gitops/charts/qwen-serving
+kubeconform -strict -summary -kubernetes-version 1.36.0 "$rendered/qwen.yaml"
+yamllint -d '{extends: default, rules: {document-start: disable, line-length: disable}}' "$rendered/qwen.yaml"

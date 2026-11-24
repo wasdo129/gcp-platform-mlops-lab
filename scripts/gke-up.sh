@@ -43,7 +43,7 @@ gcloud iam service-accounts describe "gke-lab-nodes@$PROJECT.iam.gserviceaccount
   --format='value(email)'
 gcloud container clusters list --project="$PROJECT" --format='table(name,location,status)'
 init_lab_backend
-tf plan -input=false -lock-timeout=30s -var=allow_public_node_egress=true -out="$WORK_DIR/create.tfplan"
+tf plan -input=false -lock-timeout=30s -var=allow_public_node_egress=true -var=enable_serving_pool=false -out="$WORK_DIR/create.tfplan"
 # A failed retry must never replace or delete a live database cluster.
 tf show -json "$WORK_DIR/create.tfplan" | jq -e '
   all(.resource_changes[]? | select(.mode == "managed");

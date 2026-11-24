@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: qwen-serving
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/wasdo129/gcp-platform-mlops-lab.git
+    targetRevision: "@GIT_REVISION@"
+    path: gitops/charts/qwen-serving
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: llm-serving
+  syncPolicy:
+    syncOptions: [CreateNamespace=true]

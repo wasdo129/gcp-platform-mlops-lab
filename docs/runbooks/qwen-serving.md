@@ -33,7 +33,7 @@ The upstream vLLM 0.34.0 CPU image is pinned in chart values. Registry metadata 
 
 ## Temporary pool, after separate infrastructure approval
 
-Use a reviewed checkout with the existing GCS backend and default workspace. Use the shared lifecycle lock and one operator to serialize approval, planning and application. Keep the platform provisioned with its current node egress setting. Verify the remote state cluster ID and inspect the live pool list before proceeding. For creation, ensure there is no existing `serving` pool in GKE or duplicate state. For removal, first complete application cleanup below and verify that no user workload remains scheduled on the pool. Use `mode=create` for creation or `mode=delete` for removal. The delete is a normal plan with the feature disabled. The allowlist requires exactly one serving pool action with the expected project, zone, cluster and pool name. Any detected drift, deferred change, replacement or change to another managed resource stops the operation. A saved plan must still pass Terraform state locking and stale-plan checks at apply time. The shared local lock covers this checkout workflow. Coordinate with other operators before starting.
+Use a reviewed checkout with the existing GCS backend and default workspace. Use the shared lifecycle lock and one operator to serialize approval, planning and application. Keep the platform provisioned with its current node egress setting. Verify the remote state cluster ID and inspect the live pool list before proceeding. For creation, ensure there is no existing `serving` pool in GKE or duplicate state. For removal, first complete application cleanup below and verify that no user workload remains scheduled on the pool. Use `mode=create` for creation or `mode=delete` for removal. The delete is a normal plan with the feature disabled. The allowlist requires exactly one serving pool action with the expected project, zone, cluster and pool name. Unknown drift, deferred changes, replacements and changes to any other managed resource stop the operation. The only accepted drift is the reviewed empty-collection normalization and the exact legacy CPU pool representation in the cluster response. The snapshot is specific to this lab and provider version. A change in the pool version, image, identity or any nested field requires a fresh review. A saved plan must still pass Terraform state locking and stale-plan checks at apply time. The shared local lock covers this checkout workflow. Coordinate with other operators before starting.
 
 ```bash
 (
@@ -77,10 +77,18 @@ Use a reviewed checkout with the existing GCS backend and default workspace. Use
     *) die "Invalid pool operation" ;;
   esac
 
+  if [[ "$mode" == create ]]; then
+    baseline="$WORK_DIR/baseline.tfplan"
+    tf plan -input=false -lock-timeout=30s -var=allow_public_node_egress=true \
+      -var=enable_serving_pool=false -out="$baseline"
+    tf show -json "$baseline" | jq -L scripts -e --arg project "$PROJECT" --arg zone "$ZONE" \
+      --arg cluster "$CLUSTER" 'include "serving-drift"; serving_baseline_clean($project; $zone; $cluster)'
+  fi
+
   plan="$WORK_DIR/serving.tfplan"
   tf plan -input=false -lock-timeout=30s -var=allow_public_node_egress=true \
     -var="enable_serving_pool=$enabled" -out="$plan"
-  tf show -json "$plan" | jq -e --arg operation "$mode" --arg project "$PROJECT" \
+  tf show -json "$plan" | jq -L scripts -e --arg operation "$mode" --arg project "$PROJECT" \
     --arg zone "$ZONE" --arg cluster "$CLUSTER" -f scripts/serving-plan.jq
   tf show -no-color "$plan"
   confirm "$mode $PROJECT/$ZONE/$CLUSTER/serving"

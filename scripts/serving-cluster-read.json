@@ -1,0 +1,168 @@
+{
+  "node_config": [
+    {
+      "advanced_machine_features": [],
+      "boot_disk": [
+        {
+          "disk_type": "pd-balanced",
+          "provisioned_iops": 0,
+          "provisioned_throughput": 0,
+          "size_gb": 30
+        }
+      ],
+      "boot_disk_kms_key": "",
+      "confidential_nodes": [],
+      "containerd_config": [],
+      "disk_size_gb": 30,
+      "disk_type": "pd-balanced",
+      "effective_taints": [],
+      "enable_confidential_storage": false,
+      "ephemeral_storage_local_ssd_config": [],
+      "fast_socket": [],
+      "flex_start": false,
+      "gcfs_config": [],
+      "gpudirect_strategy": "",
+      "guest_accelerator": [],
+      "gvnic": [],
+      "host_maintenance_policy": [],
+      "image_type": "COS_CONTAINERD",
+      "kubelet_config": [
+        {
+          "allowed_unsafe_sysctls": [],
+          "container_log_max_files": 0,
+          "container_log_max_size": "",
+          "cpu_cfs_quota": false,
+          "cpu_cfs_quota_period": "",
+          "cpu_manager_policy": "",
+          "crash_loop_back_off": [],
+          "eviction_max_pod_grace_period_seconds": 0,
+          "eviction_minimum_reclaim": [],
+          "eviction_soft": [],
+          "eviction_soft_grace_period": [],
+          "image_gc_high_threshold_percent": 0,
+          "image_gc_low_threshold_percent": 0,
+          "image_maximum_gc_age": "",
+          "image_minimum_gc_age": "",
+          "insecure_kubelet_readonly_port_enabled": "FALSE",
+          "max_parallel_image_pulls": 3,
+          "memory_manager": [],
+          "pod_pids_limit": 0,
+          "shutdown_grace_period_critical_pods_seconds": 0,
+          "shutdown_grace_period_seconds": 0,
+          "single_process_oom_kill": false,
+          "topology_manager": []
+        }
+      ],
+      "labels": {
+        "lab": "llmops"
+      },
+      "linux_node_config": [],
+      "local_nvme_ssd_block_config": [],
+      "local_ssd_count": 0,
+      "local_ssd_encryption_mode": "",
+      "logging_variant": "DEFAULT",
+      "machine_type": "e2-standard-2",
+      "max_run_duration": "",
+      "metadata": {
+        "disable-legacy-endpoints": "true"
+      },
+      "min_cpu_platform": "",
+      "node_group": "",
+      "node_image_config": [
+        {
+          "image": "gke-1364-gke2377000-cos-129-19506-505-8-c-pre",
+          "image_project": "gke-node-images"
+        }
+      ],
+      "oauth_scopes": [
+        "https://www.googleapis.com/auth/cloud-platform"
+      ],
+      "preemptible": false,
+      "reservation_affinity": [],
+      "resource_labels": {
+        "goog-gke-node-pool-provisioning-model": "on-demand"
+      },
+      "resource_manager_tags": {},
+      "sandbox_config": [],
+      "secondary_boot_disks": [],
+      "service_account": "gke-lab-nodes@project-557b18ac-4cdc-4a40-b3e.iam.gserviceaccount.com",
+      "shielded_instance_config": [
+        {
+          "enable_integrity_monitoring": true,
+          "enable_secure_boot": true
+        }
+      ],
+      "sole_tenant_config": [],
+      "spot": false,
+      "storage_pools": [],
+      "tags": [
+        "llmops-lab-node"
+      ],
+      "taint": [],
+      "taint_config": [],
+      "windows_node_config": [
+        {
+          "osversion": ""
+        }
+      ],
+      "workload_metadata_config": [
+        {
+          "mode": "GKE_METADATA"
+        }
+      ]
+    }
+  ],
+  "node_pool": [
+    {
+      "autoscaling": [],
+      "ignore_node_count_changes": false,
+      "initial_node_count": 1,
+      "instance_group_urls": [
+        "https://www.googleapis.com/compute/v1/projects/project-557b18ac-4cdc-4a40-b3e/zones/europe-west3-a/instanceGroupManagers/gke-llmops-lab-cpu-4774f2c5-grp"
+      ],
+      "maintenance_policy": [],
+      "managed_instance_group_urls": [
+        "https://www.googleapis.com/compute/v1/projects/project-557b18ac-4cdc-4a40-b3e/zones/europe-west3-a/instanceGroups/gke-llmops-lab-cpu-4774f2c5-grp"
+      ],
+      "management": [
+        {
+          "auto_repair": true,
+          "auto_upgrade": true
+        }
+      ],
+      "max_pods_per_node": 110,
+      "name": "cpu",
+      "name_prefix": "",
+      "network_config": [
+        {
+          "accelerator_network_profile": "",
+          "additional_node_network_configs": [],
+          "additional_pod_network_configs": [],
+          "create_pod_range": false,
+          "enable_private_nodes": false,
+          "network_performance_config": [],
+          "pod_cidr_overprovision_config": [],
+          "pod_ipv4_cidr_block": "10.44.0.0/16",
+          "pod_range": "gke-pods",
+          "subnetwork": "projects/project-557b18ac-4cdc-4a40-b3e/regions/europe-west3/subnetworks/llmops-lab"
+        }
+      ],
+      "node_count": 1,
+      "node_drain_config": [],
+      "node_locations": [
+        "europe-west3-a"
+      ],
+      "placement_policy": [],
+      "queued_provisioning": [],
+      "upgrade_settings": [
+        {
+          "blue_green_settings": [],
+          "max_surge": 1,
+          "max_unavailable": 0,
+          "strategy": "SURGE"
+        }
+      ],
+      "version": "1.36.4-gke.2377000"
+    }
+  ]
+}

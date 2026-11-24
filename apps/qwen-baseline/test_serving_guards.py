@@ -68,7 +68,7 @@ class ServingPlanTests(unittest.TestCase):
     def accepted(self, operation, changes, **other):
         plan = {"resource_changes": changes, "complete": True, "errored": False, "applyable": True, **other}
         result = subprocess.run([
-            "jq", "-e", "--arg", "operation", operation, "--arg", "project", "lab",
+            "jq", "-L", str(ROOT / "scripts"), "-e", "--arg", "operation", operation, "--arg", "project", "lab",
             "--arg", "zone", "zone", "--arg", "cluster", "cluster", "-f", ROOT / "scripts/serving-plan.jq",
         ], input=json.dumps(plan), text=True, capture_output=True)
         self.assertIn(result.returncode, (0, 1), result.stderr)
@@ -95,3 +95,76 @@ class ServingPlanTests(unittest.TestCase):
                 self.assertFalse(self.accepted(op, [change]))
                 change["change"]["actions"] = ["delete", "create"]
                 self.assertFalse(self.accepted(op, [change]))
+
+    def test_baseline_requires_no_managed_actions(self):
+        command = [
+            "jq", "-L", str(ROOT / "scripts"), "-e",
+            'include "serving-drift"; serving_baseline_clean("lab"; "zone"; "cluster")',
+        ]
+        plan = {"complete": True, "errored": False, "applyable": False, "resource_changes": [
+            {"mode": "managed", "address": "google_container_node_pool.cpu", "change": {"actions": ["no-op"]}},
+        ]}
+        for action, expected in (("no-op", 0), ("create", 1), ("update", 1), ("delete", 1)):
+            with self.subTest(action=action):
+                plan["resource_changes"][0]["change"]["actions"] = [action]
+                result = subprocess.run(command, input=json.dumps(plan), text=True, capture_output=True)
+                self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_exact_read_side_drift_and_rejected_mutations(self):
+        legacy = json.loads((ROOT / "scripts/serving-cluster-read.json").read_text())
+        cluster_before = {"project": "lab", "location": "zone", "name": "cluster", "node_config": [], "node_pool": []}
+        cluster_after = {
+            **cluster_before, "node_config": legacy["node_config"],
+            "node_pool": [{**pool, "node_config": legacy["node_config"]} for pool in legacy["node_pool"]],
+        }
+        cpu_before = {**IDENTITY, "name": "cpu", "node_config": [{
+            "resource_manager_tags": None, "storage_pools": None, "machine_type": "e2-standard-2",
+            "tags": ["llmops-lab-node"], "service_account": "expected@example.test",
+        }]}
+        cpu_after = copy.deepcopy(cpu_before)
+        cpu_after["node_config"][0].update(resource_manager_tags={}, storage_pools=[])
+        firewall_before = {
+            "project": "lab", "name": "cluster-cnpg-webhook", "source_ranges": ["10.46.0.0/28"],
+            "allow": [{"protocol": "tcp", "ports": ["9443"]}], "target_tags": ["llmops-lab-node"],
+            "source_tags": None, "source_service_accounts": None, "target_service_accounts": None,
+        }
+        firewall_after = {
+            **firewall_before, "source_tags": [], "source_service_accounts": [], "target_service_accounts": [],
+        }
+        drift = [
+            {"address": address, "mode": "managed", "provider_name": "registry.terraform.io/hashicorp/google",
+             "change": {"actions": ["update"], "before": before, "after": after}}
+            for address, before, after in (
+                ("google_container_cluster.lab", cluster_before, cluster_after),
+                ("google_container_node_pool.cpu", cpu_before, cpu_after),
+                ("google_compute_firewall.cnpg_webhook", firewall_before, firewall_after),
+            )
+        ]
+        mutations = (
+            (2, ("source_ranges",), ["0.0.0.0/0"]),
+            (2, ("allow", 0, "ports"), ["22"]),
+            (2, ("target_tags",), ["wrong"]),
+            (2, ("source_tags",), ["wrong"]),
+            (1, ("node_config", 0, "tags"), []),
+            (1, ("node_config", 0, "machine_type"), "e2-standard-4"),
+            (1, ("node_config", 0, "service_account"), "wrong@example.test"),
+            (1, ("name",), "wrong"),
+            (0, ("node_pool", 0, "name"), "wrong"),
+            (0, ("node_pool", 0, "node_config", 0, "unknown"), True),
+            (0, ("node_config", 0, "service_account"), "wrong@example.test"),
+            (0, ("node_config", 0, "machine_type"), "e2-standard-4"),
+            (0, ("new_field",), True),
+        )
+        for operation, before, after in (("create", None, IDENTITY), ("delete", IDENTITY, None)):
+            change = {"mode": "managed", "address": POOL,
+                      "change": {"actions": [operation], "before": before, "after": after}}
+            self.assertTrue(self.accepted(operation, [change], resource_drift=drift))
+            for index, parts, value in mutations:
+                with self.subTest(operation=operation, path=parts):
+                    changed = copy.deepcopy(drift)
+                    target = copy.deepcopy(changed[index]["change"]["after"])
+                    changed[index]["change"]["after"] = target
+                    for part in parts[:-1]:
+                        target = target[part]
+                    target[parts[-1]] = value
+                    self.assertFalse(self.accepted(operation, [change], resource_drift=changed))

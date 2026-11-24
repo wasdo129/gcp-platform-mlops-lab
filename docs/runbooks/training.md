@@ -7,7 +7,9 @@ The Job template is tracked in Git under `gitops/jobs/iris-training`. It is outs
 ## Build and publish after approval
 
 ```bash
-repository=$(terraform -chdir=infra/terraform/foundation output -raw artifact_registry_repository_url)
+repository=europe-west3-docker.pkg.dev/project-557b18ac-4cdc-4a40-b3e/llmops-images
+gcloud artifacts repositories describe llmops-images --location=europe-west3 \
+  --project=project-557b18ac-4cdc-4a40-b3e
 image="$repository/iris-training"
 tag="iris-$(git rev-parse --short HEAD)"
 docker buildx build --platform linux/amd64 --load -t "$image:$tag" apps/training
@@ -39,30 +41,54 @@ A successful job reports its run ID, experiment ID and metrics. For failure, ins
 
 ## Verify the run and saved model
 
-Forward `svc/mlflow` to localhost as described in the [MLflow runbook](mlflow.md). Use a Python 3.12 environment with the training dependencies. Replace the run ID with the value from the Job log.
+Forward `svc/mlflow` to localhost as described in the [MLflow runbook](mlflow.md). Use a Python 3.12 environment with the training dependencies. Replace the run ID with the value from the Job log. The commands derive the experiment ID and artifact path from the live run. Use an operator identity with read access to the GCS objects. The training pod only uses the MLflow API.
 
 ```bash
 export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 export TRAINING_RUN_ID=REPLACE_WITH_RUN_ID
 python - <<'PY'
+import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from mlflow import MlflowClient
 from sklearn.datasets import load_iris
-from skops.io import load
+from skops.io import get_untrusted_types, load
 
 client = MlflowClient()
 run_id = os.environ["TRAINING_RUN_ID"]
 run = client.get_run(run_id)
-assert run.info.status == "FINISHED"
+if run.info.status != "FINISHED" or run.info.run_id != run_id:
+    raise SystemExit("Expected the requested run to be FINISHED.")
+prefix = f"/{run.info.experiment_id}/{run_id}/artifacts"
+if run.info.artifact_uri != f"mlflow-artifacts:{prefix}":
+    raise SystemExit("Unexpected run artifact URI. Check the tracking server's artifact destination.")
+gcs_prefix = "gs://project-557b18ac-4cdc-4a40-b3e-ml-artifacts/mlflow" + prefix
 with TemporaryDirectory() as directory:
-    report = Path(client.download_artifacts(run_id, "training-report.json", directory))
-    assert json.loads(report.read_text())["metrics"] == dict(run.data.metrics)
-    model = load(client.download_artifacts(run_id, "model.skops", directory))
-    print(run.info.run_id, run.data.metrics, model.predict(load_iris().data[:3]).tolist())
+    downloads = {}
+    for name in ("model.skops", "training-report.json"):
+        path = Path(client.download_artifacts(run_id, name, directory))
+        with path.open("rb") as stream:
+            sdk_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+        # Independently read the same object with the operator's GCS read access.
+        content = subprocess.check_output(["gcloud", "storage", "cat", f"{gcs_prefix}/{name}"])
+        gcs_hash = hashlib.sha256(content).hexdigest()
+        if sdk_hash != gcs_hash:
+            raise SystemExit(f"SHA-256 mismatch: {name}")
+        print(f"{name} SHA-256 {sdk_hash}")
+        downloads[name] = path
+
+    report = json.loads(downloads["training-report.json"].read_text())
+    if report["metrics"] != dict(run.data.metrics):
+        raise SystemExit("Report and tracking metrics differ.")
+    if get_untrusted_types(file=downloads["model.skops"]):
+        raise SystemExit("The model contains unexpected types. Investigate before loading.")
+    model = load(downloads["model.skops"])
+    print(run.info.run_id, run.info.artifact_uri, run.data.metrics)
+    print("Predictions:", model.predict(load_iris().data[:3]).tolist())
 PY
 ```
 

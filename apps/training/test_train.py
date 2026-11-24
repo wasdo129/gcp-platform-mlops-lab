@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 from sklearn.datasets import load_iris
-from skops.io import dump, load
+from skops.io import dump, get_untrusted_types, load
 
 import train
 
@@ -22,6 +22,7 @@ class TrainingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "model.skops"
             dump(first, path)
+            self.assertEqual(get_untrusted_types(file=path), [])
             np.testing.assert_array_equal(first.predict(sample), load(path).predict(sample))
 
     def test_metrics(self):

@@ -113,12 +113,54 @@ def validate_training_job() -> None:
     print("Validated one-shot training Job, image digest and security settings")
 
 
+def tolerates_serving_taint(toleration: dict) -> bool:
+    if toleration.get("effect") not in (None, "", "NoSchedule"):
+        return False
+    if toleration.get("operator") == "Exists":
+        return toleration.get("key") in (None, "", "llmops.workload")
+    return toleration.get("key") == "llmops.workload" and toleration.get("value") == "serving"
+
+
+def validate_serving_placement(resources: list[dict]) -> None:
+    serving_pod = None
+    for resource in resources:
+        if resource["kind"] not in ("Deployment", "StatefulSet"):
+            continue
+        pod = resource["spec"]["template"]["spec"]
+        if resource["metadata"]["name"] == "qwen-serving":
+            serving_pod = pod
+        elif any(map(tolerates_serving_taint, pod.get("tolerations", []))):
+            raise ValueError(f"Platform workload tolerates the serving taint: {resource['metadata']['name']}")
+
+    for path in ("gitops/apps/mlflow/deployment.yaml", "gitops/apps/cloudnative-pg/cluster.yaml"):
+        resource = yaml.safe_load(Path(path).read_text())
+        spec = resource["spec"]
+        pod = spec["template"]["spec"] if resource["kind"] == "Deployment" else spec.get("affinity", {})
+        if any(map(tolerates_serving_taint, pod.get("tolerations", []))):
+            raise ValueError(f"Data workload tolerates the serving taint: {path}")
+
+    if serving_pod is None or "nodeName" in serving_pod:
+        raise ValueError("Serving must use pool placement without a fixed node name")
+    terms = serving_pod["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
+    pool_selector = {"key": "llmops.workload", "operator": "In", "values": ["serving"]}
+    if not terms or any(pool_selector not in term.get("matchExpressions", []) for term in terms):
+        raise ValueError("Each serving affinity term must require the dedicated pool label")
+    required_toleration = {"key": "llmops.workload", "operator": "Equal", "value": "serving", "effect": "NoSchedule"}
+    if serving_pod.get("tolerations") != [required_toleration]:
+        raise ValueError("Serving must use the dedicated NoSchedule toleration")
+    print("Validated serving pool placement and platform taint isolation")
+
+
 def main() -> None:
     schemas = {}
+    workloads = []
     for filename in sys.argv[1:]:
         with Path(filename).open() as stream:
             for resource in yaml.safe_load_all(stream):
-                if not resource or resource["kind"] != "CustomResourceDefinition":
+                if not resource:
+                    continue
+                if resource["kind"] != "CustomResourceDefinition":
+                    workloads.append(resource)
                     continue
                 spec = resource["spec"]
                 for version in spec["versions"]:
@@ -136,6 +178,7 @@ def main() -> None:
 
     validate_mlflow_overrides()
     validate_training_job()
+    validate_serving_placement(workloads)
 
 
 if __name__ == "__main__":

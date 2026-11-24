@@ -47,9 +47,11 @@ jobs:
           for script in scripts/*.sh; do bash -n "$script"; done
           shellcheck -x scripts/{gke-up,gke-down,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up,render-training-job}.sh
           shfmt -d -i 2 -ci scripts/{gke-up,gke-down,lab-common,postgres-backup,postgres-restore,test-postgres-local,validate-gitops,mlflow-up,mlflow-common,render-training-job}.sh
-          yamllint -d '{extends: default, rules: {document-start: disable, line-length: disable}}' gitops .github/workflows
+          yamllint -d '{extends: default, rules: {document-start: disable, line-length: disable}, ignore: [gitops/charts/qwen-serving/templates/]}' gitops .github/workflows
           python -m py_compile scripts/mlflow-smoke.py
           actionlint
+      - name: Serving offline tests
+        run: python -B -m unittest discover -s apps/qwen-baseline -p 'test_*.py'
       - name: Helm and Kubernetes schemas
         run: scripts/validate-gitops.sh
       - name: Native AMD64 MLflow image smoke test

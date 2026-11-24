@@ -4,6 +4,26 @@ A CPU-only Job trains scikit-learn logistic regression on the bundled Iris datas
 
 The Job template is tracked in Git under `gitops/jobs/iris-training`. It is outside every Argo CD Application path. The local renderer injects a published SHA-256 image digest and replaces the template name with `generateName`. Creating the rendered Job is an explicit operator action. Job deadlines, no automatic retry and a one-hour TTL bound its lifetime.
 
+## Phase 4 acceptance record
+
+GKE end-to-end acceptance passed on 24 November 2026 from Git revision `e943a0367c4643f676eb3ed140a6269f64343f1a`.
+
+| Check | Result |
+| --- | --- |
+| Platform resource optimization | PASS. Effective CPU requests fell from 1915m to 1675m on the 1930m node. |
+| Training image publication | PASS. Registry tag `iris-e943a03` resolved to `sha256:421896ca71f69b63f6baaf78711b949d401a97c3d06ccae2cc3be781f5022ca1` with a runnable Linux AMD64 manifest. |
+| Training Job | `iris-training-62q5n` completed with exit code 0, 16 seconds of container runtime and 0 restarts. |
+| MLflow | Experiment `3`, run `68500034ede741fc8534d88cb253fca7`, status `FINISHED`. |
+| Metrics | Accuracy `0.9666666667`, macro F1 `0.9665831245`. Values matched the Job log, SDK and training report. |
+| SDK and GCS artifact verification | PASS. Both SHA-256 hashes matched independent GCS reads. |
+| Model deserialization and inference | PASS. The skops model required no trusted-type overrides and produced 150 predictions. |
+| Platform health after training | PASS. Five Argo CD Applications were Synced and Healthy. PostgreSQL was Ready and MLflow returned HTTP health OK. Both retained their Pod UIDs and zero restarts. MemoryPressure was false. |
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `model.skops` | `e9000a27c903864b90c08919698e326fc0c241a18716efd7227bd074aea901bc` |
+| `training-report.json` | `c37c15271c2c05f63feed085e1bbc0e79108733489dbeb3ac8386035d7e90909` |
+
 ## Build and publish after approval
 
 ```bash

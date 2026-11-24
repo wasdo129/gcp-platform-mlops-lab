@@ -1,6 +1,6 @@
 # GKE LLMOps platform lab
 
-An ephemeral CPU-first LLMOps platform on GKE Standard. Phases 1 and 2 cover Terraform, GitOps, CloudNativePG and local backup/restore. The full GKE recreation test requires explicit cloud approval and is pending.
+An ephemeral CPU-first LLMOps platform on GKE Standard. Phases 1 and 2 cover Terraform, GitOps, CloudNativePG and local backup/restore. GKE recreation and PostgreSQL restore passed live acceptance. Phases 3 and 4 also passed live acceptance for MLflow and CPU training.
 
 - [Controlled first deployment and safe teardown](docs/runbooks/lifecycle.md)
 - [PostgreSQL recreation acceptance test](docs/runbooks/integration.md)

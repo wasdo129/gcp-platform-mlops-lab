@@ -1,0 +1,19 @@
+replicas: 1
+image: docker.io/vllm/vllm-openai-cpu@sha256:b14c3a46a4b08852b32528643e070d57f3731cccb0fa33ef86d4f3b3f8ac36c4
+downloaderImage: docker.io/library/python@sha256:2986c55feb36e6cae00fa1fefb454283e4b33f35e75ff8bdd123b134130be301
+model:
+  servedName: qwen3-1.7b
+  dtype: bfloat16
+  maxLength: 2048
+  maxSequences: 1
+  kvCacheBytes: 536870912
+  cacheSize: 12Gi
+resources:
+  requests:
+    cpu: 2500m
+    memory: 6Gi
+    ephemeral-storage: 6Gi
+  limits:
+    cpu: 3500m
+    memory: 8Gi
+    ephemeral-storage: 14Gi

@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicas }}
+  progressDeadlineSeconds: 1800
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/snapshot: {{ include (print $.Template.BasePath "/snapshot.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: llmops.workload
+                    operator: In
+                    values: [serving]
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: [amd64]
+      tolerations:
+        - key: llmops.workload
+          operator: Equal
+          value: serving
+          effect: NoSchedule
+      initContainers:
+        - name: snapshot
+          image: {{ .Values.downloaderImage | quote }}
+          command: ["timeout", "900", "python", "-B", "/snapshot/model_snapshot.py"]
+          args: ["/snapshot/model-lock.json", "/models/qwen3"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+              ephemeral-storage: 6Gi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 14Gi
+          volumeMounts:
+            - name: snapshot
+              mountPath: /snapshot
+              readOnly: true
+            - name: models
+              mountPath: /models
+      containers:
+        - name: vllm
+          image: {{ .Values.image | quote }}
+          args:
+            - /models/qwen3
+            - --host=0.0.0.0
+            - --port=8000
+            - --served-model-name={{ .Values.model.servedName }}
+            - --dtype={{ .Values.model.dtype }}
+            - --max-model-len={{ .Values.model.maxLength }}
+            - --max-num-seqs={{ .Values.model.maxSequences }}
+            - --kv-cache-memory-bytes={{ .Values.model.kvCacheBytes }}
+          env:
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: VLLM_NO_USAGE_STATS
+              value: "1"
+            - name: VLLM_CPU_OMP_THREADS_BIND
+              value: nobind
+            - name: OMP_NUM_THREADS
+              value: "2"
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp/cache
+          ports:
+            - name: http
+              containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+            - name: temp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: snapshot
+          configMap:
+            name: {{ .Release.Name }}-snapshot
+        - name: models
+          emptyDir:
+            sizeLimit: {{ .Values.model.cacheSize }}
+        - name: temp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi

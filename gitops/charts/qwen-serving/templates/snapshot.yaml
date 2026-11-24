@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-snapshot
+binaryData:
+  model-lock.json: {{ .Files.Get "files/model-lock.json" | b64enc }}
+  model_snapshot.py: {{ .Files.Get "files/model_snapshot.py" | b64enc }}
